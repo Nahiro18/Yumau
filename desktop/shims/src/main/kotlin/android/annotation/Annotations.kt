@@ -19,7 +19,6 @@ package android.annotation
     AnnotationTarget.PROPERTY_SETTER,
     AnnotationTarget.FILE,
     AnnotationTarget.VALUE_PARAMETER,
-    AnnotationTarget.STATEMENT,
 )
 annotation class SuppressedLint(
     vararg val lint: String,
