@@ -1,6 +1,6 @@
 /*
  * YumaPlayer Desktop (Linux) port shim.
- * Minimal android.annotation.SuppressLint replacement.
+ * Minimal android.annotation replacements for pure-JVM compilation.
  */
 package android.annotation
 
@@ -20,11 +20,7 @@ package android.annotation
     AnnotationTarget.FILE,
     AnnotationTarget.VALUE_PARAMETER,
 )
-annotation class SuppressedLint(
-    vararg val lint: String,
-    val repeatSuppress: Boolean = false,
-    val toolsOnly: Boolean = false,
-)
+annotation class SuppressLint(vararg val value: String)
 
 @Retention(AnnotationRetention.SOURCE)
 @Target(
@@ -42,28 +38,6 @@ annotation class SuppressedLint(
     AnnotationTarget.FILE,
     AnnotationTarget.VALUE_PARAMETER,
 )
-annotation class SuppressLint(vararg val value: String)
-
-/** Source-compatible duplicate of android.annotation.SuppressLint (same spelling). */
-@Retention(AnnotationRetention.SOURCE)
-@Target(
-    AnnotationTarget.CLASS,
-    AnnotationTarget.FUNCTION,
-    AnnotationTarget.PROPERTY,
-    AnnotationTarget.FIELD,
-    AnnotationTarget.LOCAL_VARIABLE,
-    AnnotationTarget.ANNOTATION_CLASS,
-    AnnotationTarget.EXPRESSION,
-    AnnotationTarget.TYPE,
-    AnnotationTarget.CONSTRUCTOR,
-    AnnotationTarget.PROPERTY_GETTER,
-    AnnotationTarget.PROPERTY_SETTER,
-    AnnotationTarget.FILE,
-    AnnotationTarget.VALUE_PARAMETER,
-)
-annotation class SuppressLint(vararg val value: String)
-
-
 annotation class TargetApi(vararg val value: kotlin.reflect.KClass<*>)
 
 annotation class CallSuper
