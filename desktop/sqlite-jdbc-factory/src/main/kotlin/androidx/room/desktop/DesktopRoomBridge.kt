@@ -2,30 +2,31 @@
  * YumaPlayer Desktop (Linux) port.
  *
  * Bridge between the Android-style Room API (shimmed in :desktop:shims) and the
- * pure-JVM androidx.room runtime used on desktop. Instead of trying to implement
- * androidx.room's internal SQLiteDriver contract by hand, we delegate to
- * `Room.createApplicationBuilder`, which accepts a standard
- * androidx.sqlite SupportSQLiteOpenHelper.Factory — our JDBC/sqlite-jdbc one.
+ * pure-JVM androidx.room runtime used on desktop. The JVM Room runtime cannot be
+ * fed a SupportSQLiteOpenHelper.Factory, so the builder returned here is backed
+ * directly by our JDBC connection provider via setDriver (see JdbcSqlite.kt).
  */
 package androidx.room.desktop
 
 import android.content.Context
+import androidx.room.DesktopRoomBridge
 import androidx.room.RoomDatabase
-import androidx.sqlite.db.framework.DesktopSqliteBridge
-import moe.rukamori.archivetune.desktop.sqlite.JdbcSQLiteOpenHelper
+import moe.rukamori.archivetune.desktop.sqlite.jdbcRoomDriver
 
 /**
- * Installs a JVM Room provider into [DesktopSqliteBridge] so verbatim Android
+ * Installs the JVM Room provider into [DesktopRoomBridge] so verbatim Android
  * sources calling Room.databaseBuilder(...) / Room.inMemoryDatabaseBuilder(...)
  * work on desktop. Called from DesktopSqliteInstaller.install().
  */
 object DesktopRoomInstaller {
     fun install() {
-        DesktopSqliteBridge.roomProvider = DesktopSqliteBridgeRoomProvider
+        DesktopRoomBridge.provider = JdbcRoomProvider
+        // Legacy hook kept in sync for any code still reading it.
+        androidx.sqlite.db.framework.DesktopSqliteBridge.roomProvider = JdbcRoomProvider
     }
 }
 
-private object DesktopSqliteBridgeRoomProvider : DesktopSqliteBridge.RoomProvider {
+private object JdbcRoomProvider : DesktopRoomBridge.RoomProvider {
     override fun <T : RoomDatabase> builderFor(
         context: Context,
         klass: Class<T>,
@@ -39,9 +40,10 @@ private object DesktopSqliteBridgeRoomProvider : DesktopSqliteBridge.RoomProvide
                 file.parentFile?.mkdirs()
                 file.absolutePath
             }
-        return androidx.room.Room.createApplicationBuilder(klass) {
-            factory(JdbcSQLiteOpenHelper.Factory)
-            this.name(path)
-        }
+        val builder: RoomDatabase.Builder<T> =
+            androidx.room.Room.databaseBuilder<T>(path) {
+                klass.getDeclaredConstructor().newInstance()
+            }
+        return builder.setDriver(jdbcRoomDriver(path))
     }
 }

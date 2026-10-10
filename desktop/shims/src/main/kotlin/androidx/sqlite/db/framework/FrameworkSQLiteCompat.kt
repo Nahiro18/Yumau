@@ -32,9 +32,10 @@ object DesktopSqliteBridge {
         UnsupportedFactory
 
     /**
-     * Not a functional interface (the builder method is generic, which SAM
-     * interfaces cannot express); implement as an object.
+     * Kept for source compatibility with older shared code; the Room provider
+     * now lives on [androidx.room.DesktopRoomBridge].
      */
+    @Deprecated("Use androidx.room.DesktopRoomBridge.RoomProvider")
     interface RoomProvider {
         fun <T : androidx.room.RoomDatabase> builderFor(
             context: android.content.Context,
@@ -43,11 +44,11 @@ object DesktopSqliteBridge {
         ): androidx.room.RoomDatabase.Builder<T>
     }
 
-    fun install(
-        newFactory: SupportSQLiteOpenHelper.Factory,
-    ) {
+    fun install(newFactory: SupportSQLiteOpenHelper.Factory) {
         factory = newFactory
     }
+
+    var roomProvider: androidx.room.DesktopRoomBridge.RoomProvider? = null
 
     private object UnsupportedFactory : SupportSQLiteOpenHelper.Factory {
         override fun create(configuration: SupportSQLiteOpenHelper.Configuration): SupportSQLiteOpenHelper =
