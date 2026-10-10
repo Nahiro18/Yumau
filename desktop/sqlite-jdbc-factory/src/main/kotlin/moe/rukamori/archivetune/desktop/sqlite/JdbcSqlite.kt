@@ -125,29 +125,45 @@ class JdbcSupportDatabase(
     override fun compileStatement(sql: String): androidx.sqlite.db.SupportSQLiteStatement =
         JdbcPreparedStatment(db(), sql)
 
-    override fun query(sql: String): android.database.Cursor = rawQuery(sql, null)
+    override fun query(sql: String): Cursor = rawQuery(sql, null)
 
     override fun query(
         sql: String,
         bindArgs: Array<out Any?>?,
-    ): android.database.Cursor = rawQuery(sql, bindArgs)
+    ): Cursor = execQuery(sql, bindArgs?.map { it })
 
     override fun rawQuery(
         sql: String,
         selectionArgs: Array<out String?>?,
-    ): android.database.Cursor = execQuery(sql, selectionArgs?.map { it as Any? })
+    ): Cursor = execQuery(sql, selectionArgs?.map { it as Any? })
 
-    override fun query(q: androidx.sqlite.db.SupportSQLiteQuery): android.database.Cursor =
-        execQuery(q.sql, q.bindArgs())
+    override fun query(q: androidx.sqlite.db.SupportSQLiteQuery): Cursor =
+        execQuery(q.sql, q.bindArgs().toList())
 
     private fun execQuery(
         sql: String,
         args: List<Any?>?,
-    ): android.database.Cursor {
+    ): Cursor {
         val ps = db().prepareStatement(sql)
         args?.forEachIndexed { i, v -> ps.setObject(i + 1, normalize(v)) }
         return JdbcCursor(ps.executeQuery(), ps)
     }
+
+    override fun update(
+        table: String,
+        values: android.content.ContentValues,
+    ): Long = update(table, CONFLICT_NONE, values, null, null)
+
+    override fun update(
+        table: String,
+        conflictAlgorithm: Int,
+        values: android.content.ContentValues,
+    ): Long = update(table, conflictAlgorithm, values, null, null)
+
+    override fun insert(
+        table: String,
+        values: android.content.ContentValues,
+    ): Long = insert(CONFLICT_NONE, table, values)
 
     override fun insert(
         table: String,
