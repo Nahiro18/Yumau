@@ -26,11 +26,43 @@ annotation class SuppressedLint(
     val toolsOnly: Boolean = false,
 )
 
+@Retention(AnnotationRetention.SOURCE)
+@Target(
+    AnnotationTarget.CLASS,
+    AnnotationTarget.FUNCTION,
+    AnnotationTarget.PROPERTY,
+    AnnotationTarget.FIELD,
+    AnnotationTarget.LOCAL_VARIABLE,
+    AnnotationTarget.ANNOTATION_CLASS,
+    AnnotationTarget.EXPRESSION,
+    AnnotationTarget.TYPE,
+    AnnotationTarget.CONSTRUCTOR,
+    AnnotationTarget.PROPERTY_GETTER,
+    AnnotationTarget.PROPERTY_SETTER,
+    AnnotationTarget.FILE,
+    AnnotationTarget.VALUE_PARAMETER,
+)
 annotation class SuppressLint(vararg val value: String)
 
-/** Alias kept for source compatibility with android.annotation.SuppressLint. */
-@Suppress("ClassName")
-typealiasSuppressLint = SuppressLint
+/** Source-compatible duplicate of android.annotation.SuppressLint (same spelling). */
+@Retention(AnnotationRetention.SOURCE)
+@Target(
+    AnnotationTarget.CLASS,
+    AnnotationTarget.FUNCTION,
+    AnnotationTarget.PROPERTY,
+    AnnotationTarget.FIELD,
+    AnnotationTarget.LOCAL_VARIABLE,
+    AnnotationTarget.ANNOTATION_CLASS,
+    AnnotationTarget.EXPRESSION,
+    AnnotationTarget.TYPE,
+    AnnotationTarget.CONSTRUCTOR,
+    AnnotationTarget.PROPERTY_GETTER,
+    AnnotationTarget.PROPERTY_SETTER,
+    AnnotationTarget.FILE,
+    AnnotationTarget.VALUE_PARAMETER,
+)
+annotation class SuppressLint(vararg val value: String)
+
 
 annotation class TargetApi(vararg val value: kotlin.reflect.KClass<*>)
 
