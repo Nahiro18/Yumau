@@ -30,8 +30,13 @@ ksp {
 
 dependencies {
     implementation(project(":desktop:shims"))
+    // Bridge hook (DesktopSqliteBridge) lives in :desktop:shims; the JDBC-backed
+    // androidx.sqlite factory implementation is contributed at runtime by
+    // :desktop:sqlite-jdbc-factory (wired through :desktop:app).
 
-    implementation(libs.room.runtime)
+    // Room is consumed as a pure JVM library (the android.* APIs its -android
+    // variant would need are provided by :desktop:shims at compile time).
+    api("androidx.room:room-runtime:2.8.4")
     implementation(libs.room.ktx)
     ksp(libs.room.compiler)
 
