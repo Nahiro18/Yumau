@@ -2,12 +2,12 @@
  * YumaPlayer Desktop (Linux) port shim.
  *
  * The shared `database` sources call Room.databaseBuilder(...) / Room.inMemoryDatabaseBuilder(...).
- * On desktop we compile against androidx.room:room (the JVM artifact), whose public API is
- * RoomDatabase.createApplicationBuilder + generated `*Impl` classes instead. This shim keeps the
+ * On desktop we compile against androidx.room:room-runtime-jvm, whose public API is
+ * Room.createApplicationBuilder + generated `*Impl` classes instead. This shim keeps the
  * Android-style entry points source-compatible and delegates to the provider installed by the
  * desktop runtime via DesktopSqliteBridge.install().
  */
-package androidx.room
+package androidx.room.desktop
 
 import android.content.Context
 import androidx.sqlite.db.framework.DesktopSqliteBridge

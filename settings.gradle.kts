@@ -45,9 +45,34 @@ dependencyResolutionManagement {
 // }
 
 rootProject.name = "YumaPlayer"
-include(":app")
-include(":designsystem")
-include(":database")
+
+// ---- Linux Desktop port (YumaPlayer for Linux Mint) ----
+// Always available (pure-JVM modules).
+include(":desktop:shims")
+include(":desktop:database")
+include(":desktop:sqlite-jdbc-factory")
+include(":desktop:runtime")
+include(":desktop:app")
+
+// Android modules can be skipped for desktop-only builds (e.g. CI without the
+// full NDK, or local iteration on the desktop port only). Enable with:
+//   YUMA_DESKTOP_ONLY=true ./gradlew :desktop:app:build
+// The flag is also read from Gradle properties (-PYUMA_DESKTOP_ONLY=true).
+val skipAndroidModules = System.getenv("YUMA_DESKTOP_ONLY")?.toBoolean() == true ||
+    (providers.gradleProperty("YUMA_DESKTOP_ONLY").orNull?.toBoolean() == true)
+
+if (!skipAndroidModules) {
+    include(":app")
+    include(":designsystem")
+    include(":database")
+    include(":lastfm")
+    include(":canvas")
+    include(":shazamkit")
+    include(":spotifycore")
+    include(":flaccore")
+}
+
+// Pure-JVM library modules (shared between Android and Desktop builds).
 include(":core")
 include(":core:innertube")
 include(":core:audio-dsp")
@@ -57,20 +82,8 @@ include(":lyrics:simpmusic")
 include(":lyrics:betterlyrics")
 include(":lyrics:unison")
 include(":lyrics:youlyplus")
-include(":lastfm")
-include(":canvas")
-include(":shazamkit")
-include(":spotifycore")
-include(":flaccore")
 include(":moriextractor")
 include(":morideobfuscator")
-
-// ---- Linux Desktop port (YumaPlayer for Linux Mint) ----
-include(":desktop:shims")
-include(":desktop:database")
-include(":desktop:sqlite-jdbc-factory")
-include(":desktop:runtime")
-include(":desktop:app")
 
 // Use a local copy of NewPipe Extractor by uncommenting the lines below.
 // We assume, that ArchiveTune and NewPipe Extractor have the same parent directory.
