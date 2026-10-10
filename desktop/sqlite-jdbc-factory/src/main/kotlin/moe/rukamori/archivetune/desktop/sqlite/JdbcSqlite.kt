@@ -9,6 +9,10 @@
  */
 package moe.rukamori.archivetune.desktop.sqlite
 
+import android.database.Cursor
+import androidx.sqlite.SQLiteConnection as AndroidxSQLiteConnection
+import androidx.sqlite.SQLiteDriver as AndroidxSQLiteDriver
+import androidx.sqlite.SQLiteStatement as AndroidxSQLiteStatement
 import androidx.sqlite.db.SupportSQLiteDatabase
 import androidx.sqlite.db.SupportSQLiteOpenHelper
 import androidx.sqlite.db.framework.DesktopSqliteBridge
@@ -20,7 +24,7 @@ object DesktopSqliteInstaller {
     fun install() {
         // Force driver registration even when ServiceLoader is unavailable.
         Class.forName("org.sqlite.JDBC")
-        DesktopSqliteBridge.install(JdbcSQLiteOpenHelper.Factory, null)
+        DesktopSqliteBridge.install(JdbcSQLiteOpenHelper.Factory)
         androidx.room.desktop.DesktopRoomInstaller.install()
     }
 }
@@ -49,8 +53,8 @@ class JdbcSupportDatabase(
 
     override val isReadOnly: Boolean get() = false
 
-    override val version: Int
-        get() = db().createStatement().use { st ->
+    override fun getVersion(): Int =
+        db().createStatement().use { st ->
             st.executeQuery("PRAGMA user_version").let { rs -> if (rs.next()) rs.getInt(1) else 0 }
         }
 
@@ -152,13 +156,15 @@ class JdbcSupportDatabase(
     override fun update(
         table: String,
         values: android.content.ContentValues,
-    ): Long = update(table, CONFLICT_NONE, values, null, null)
+    ): Long = update(table, CONFLICT_NONE, values, null, null).toLong()
 
     override fun update(
         table: String,
         conflictAlgorithm: Int,
         values: android.content.ContentValues,
-    ): Long = update(table, conflictAlgorithm, values, null, null)
+        whereClause: String?,
+        whereArgs: Array<out Any?>?,
+    ): Int = updateImpl(table, conflictAlgorithm, values, whereClause, whereArgs)
 
     override fun insert(
         table: String,
@@ -166,8 +172,8 @@ class JdbcSupportDatabase(
     ): Long = insert(CONFLICT_NONE, table, values)
 
     override fun insert(
-        table: String,
         conflictAlgorithm: Int,
+        table: String,
         values: android.content.ContentValues,
     ): Long {
         val cols = values.keySet().toList()
@@ -185,7 +191,7 @@ class JdbcSupportDatabase(
         return latestInsertRowId
     }
 
-    override fun update(
+    private fun updateImpl(
         table: String,
         conflictAlgorithm: Int,
         values: android.content.ContentValues,
@@ -411,9 +417,9 @@ class JdbcCursor(
 
     override fun getType(columnIndex: Int): Int =
         when (meta.getColumnType(columnIndex + 1)) {
-            java.sql.Types.BLOB -> FIELD_TYPE_BLOB
-            java.sql.Types.FLOAT, java.sql.Types.DOUBLE, java.sql.Types.DECIMAL, java.sql.Types.NUMERIC -> FIELD_TYPE_FLOAT
-            else -> FIELD_TYPE_STRING
+            java.sql.Types.BLOB -> Cursor.FIELD_TYPE_BLOB
+            java.sql.Types.FLOAT, java.sql.Types.DOUBLE, java.sql.Types.DECIMAL, java.sql.Types.NUMERIC -> Cursor.FIELD_TYPE_FLOAT
+            else -> Cursor.FIELD_TYPE_STRING
         }
 
     override fun getBlob(columnIndex: Int): ByteArray = rs.getBytes(columnIndex + 1) ?: ByteArray(0)
@@ -462,11 +468,11 @@ class JdbcSQLiteOpenHelper(
 
     override val databaseName: String get() = configuration.name ?: ":memory:"
 
-    override val writableDatabase: SupportSQLiteDatabase get() = getWritableDatabase()
+    override val writableDatabase: SupportSQLiteDatabase get() = openWritableDatabase()
 
-    override val readableDatabase: SupportSQLiteDatabase get() = getReadableDatabase()
+    override val readableDatabase: SupportSQLiteDatabase get() = openReadableDatabase()
 
-    override fun getWritableDatabase(): SupportSQLiteDatabase =
+    override fun openWritableDatabase(): SupportSQLiteDatabase =
         dbImpl ?: synchronized(this) {
             dbImpl ?: JdbcSupportDatabase(path = configuration.name ?: createTempFileDb()).also {
                 it.beginTransaction()
@@ -481,7 +487,7 @@ class JdbcSQLiteOpenHelper(
             }
         }
 
-    override fun getReadableDatabase(): SupportSQLiteDatabase = getWritableDatabase()
+    override fun openReadableDatabase(): SupportSQLiteDatabase = openWritableDatabase()
 
     override fun setWriteAheadLoggingEnabled(enabled: Boolean) {}
 
@@ -492,14 +498,6 @@ class JdbcSQLiteOpenHelper(
         dbImpl = null
     }
 
-    override fun onConfigure(db: SupportSQLiteDatabase) {
-        configuration.callback?.onConfigure(db)
-    }
-
-    override fun onOpen(db: SupportSQLiteDatabase) {
-        configuration.callback?.onOpen(db)
-    }
-
     private fun createTempFileDb(): String =
         java.io.File.createTempFile("yuma", ".db").absolutePath
 
@@ -508,5 +506,117 @@ class JdbcSQLiteOpenHelper(
             JdbcSQLiteOpenHelper(configuration)
     }
 }
+
+/*
+ * Implementation of androidx.sqlite's pure-JVM driver contract over JDBC.
+ * This is what Room 2.8 (room-runtime-jvm) actually consumes via
+ * RoomDatabase.Builder.setDriver(...). One shared JDBC connection backs the
+ * database; statements are prepared/closed per call.
+ */
+class JdbcRoomConnection(
+    private val path: String,
+) : AndroidxSQLiteConnection {
+    private var conn: Connection? = null
+
+    internal fun jdbc(): Connection =
+        conn ?: synchronized(this) {
+            conn ?: DriverManager.getConnection("jdbc:sqlite:$path").also { c ->
+                c.createStatement().use { st ->
+                    st.execute("PRAGMA foreign_keys = ON")
+                }
+                conn = c
+            }
+        }
+
+    override fun prepare(sql: String): AndroidxSQLiteStatement = JdbcRoomStatement(jdbc(), sql)
+
+    override fun close() {
+        conn?.close()
+        conn = null
+    }
+}
+
+class JdbcRoomStatement(
+    private val conn: Connection,
+    private val sql: String,
+) : AndroidxSQLiteStatement {
+    private val ps: java.sql.PreparedStatement = conn.prepareStatement(sql)
+    private var rs: java.sql.ResultSet? = null
+    private var rowLoaded = false
+
+    override fun bindBlob(index: Int, value: ByteArray) { ps.setBytes(index + 1, value) }
+
+    override fun bindDouble(index: Int, value: Double) { ps.setDouble(index + 1, value) }
+
+    override fun bindLong(index: Int, value: Long) { ps.setLong(index + 1, value) }
+
+    override fun bindText(index: Int, value: String) { ps.setString(index + 1, value) }
+
+    override fun bindNull(index: Int) { ps.setObject(index + 1, null) }
+
+    private fun currentRow(): java.sql.ResultSet? = rs
+
+    override fun step(): Boolean {
+        if (!rowLoaded) {
+            rs = ps.executeQuery()
+            rowLoaded = true
+        }
+        val r = rs ?: return false
+        return r.next()
+    }
+
+    override fun reset() {
+        runCatching { rs?.close() }
+        rs = null
+        rowLoaded = false
+        runCatching { ps.clearParameters() }
+    }
+
+    override fun clearBindings() {
+        runCatching { ps.clearParameters() }
+    }
+
+    private fun col(i: Int) = i + 1
+
+    override fun getBlob(index: Int): ByteArray = currentRow()?.getBytes(col(index)) ?: ByteArray(0)
+
+    override fun getDouble(index: Int): Double = currentRow()?.getDouble(col(index)) ?: 0.0
+
+    override fun getLong(index: Int): Long = currentRow()?.getLong(col(index)) ?: 0L
+
+    override fun getText(index: Int): String = currentRow()?.getString(col(index)) ?: ""
+
+    override fun isNull(index: Int): Boolean = currentRow()?.getObject(col(index)) == null
+
+    override fun getColumnCount(): Int = currentRow()?.metaData?.columnCount ?: 0
+
+    override fun getColumnName(index: Int): String = currentRow()?.metaData?.getColumnLabel(col(index)) ?: ""
+
+    override fun getColumnType(index: Int): Int =
+        when (currentRow()?.metaData?.getColumnType(col(index))) {
+            java.sql.Types.INTEGER, java.sql.Types.BIGINT, java.sql.Types.SMALLINT,
+            java.sql.Types.TINYINT, java.sql.Types.BOOLEAN,
+            -> androidx.sqlite.SQLite.SQLITE_DATA_INTEGER
+            java.sql.Types.FLOAT, java.sql.Types.DOUBLE, java.sql.Types.REAL,
+            java.sql.Types.DECIMAL, java.sql.Types.NUMERIC,
+            -> androidx.sqlite.SQLite.SQLITE_DATA_FLOAT
+            java.sql.Types.BINARY, java.sql.Types.VARBINARY, java.sql.Types.LONGVARBINARY,
+            -> androidx.sqlite.SQLite.SQLITE_DATA_BLOB
+            else -> androidx.sqlite.SQLite.SQLITE_DATA_TEXT
+        }
+
+    override fun close() {
+        runCatching { rs?.close() }
+        runCatching { ps.close() }
+    }
+}
+
+class JdbcRoomDriver(
+    private val path: String,
+) : AndroidxSQLiteDriver {
+    override fun open(path: String): AndroidxSQLiteConnection = JdbcRoomConnection(path)
+}
+
+fun jdbcRoomDriver(path: String): AndroidxSQLiteDriver = JdbcRoomDriver(path)
 
 /** Room JVM provider installed into the shim bridge (see DesktopRoomBridge.kt). */

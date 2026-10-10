@@ -37,7 +37,9 @@ interface SupportSQLiteStatement {
 
     fun executeUpdateDelete(): Int
 
-    fun execute()
+    fun executeSimple()
+
+    fun execute() { executeSimple() }
 
     fun simpleQueryForLong(): Long
 
@@ -97,7 +99,9 @@ interface SupportSQLiteDatabase {
 
     val isReadOnly: Boolean
 
-    var version: Int
+    fun getVersion(): Int
+
+    fun setVersion(value: Int)
 
     val isInTransaction: Boolean
 
@@ -123,9 +127,10 @@ interface SupportSQLiteDatabase {
 
     fun rawQuery(sql: String, selectionArgs: Array<out String?>?): Cursor
 
-    fun update(table: String, values: ContentValues): Long
-
-    fun update(table: String, conflictAlgorithm: Int, values: ContentValues): Long
+    fun update(
+        table: String,
+        values: ContentValues,
+    ): Long
 
     fun update(
         table: String,
@@ -135,9 +140,16 @@ interface SupportSQLiteDatabase {
         whereArgs: Array<out Any?>?,
     ): Int
 
-    fun insert(table: String, values: ContentValues): Long
+    fun insert(
+        table: String,
+        values: ContentValues,
+    ): Long
 
-    fun insert(conflictAlgorithm: Int, table: String, values: ContentValues): Long
+    fun insert(
+        conflictAlgorithm: Int,
+        table: String,
+        values: ContentValues,
+    ): Long
 
     fun delete(table: String, whereClause: String?, whereArgs: Array<out Any?>?): Int
 
@@ -179,9 +191,9 @@ interface SupportSQLiteOpenHelper {
 
     val readableDatabase: SupportSQLiteDatabase
 
-    fun getWritableDatabase(): SupportSQLiteDatabase
+    fun openWritableDatabase(): SupportSQLiteDatabase = writableDatabase
 
-    fun getReadableDatabase(): SupportSQLiteDatabase
+    fun openReadableDatabase(): SupportSQLiteDatabase = readableDatabase
 
     fun setWriteAheadLoggingEnabled(enabled: Boolean)
 
