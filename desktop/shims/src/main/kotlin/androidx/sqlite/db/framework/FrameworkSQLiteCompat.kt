@@ -8,8 +8,8 @@
  */
 package androidx.sqlite.db.framework
 
-import android.database.SupportSQLiteDatabase
-import android.database.SupportSQLiteOpenHelper
+import androidx.sqlite.db.SupportSQLiteDatabase
+import androidx.sqlite.db.SupportSQLiteOpenHelper
 
 class FrameworkSQLiteDatabase(
     @Suppress("unused") private val delegate: SupportSQLiteDatabase,
