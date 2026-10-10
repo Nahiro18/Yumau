@@ -29,6 +29,10 @@ annotation class SuppressedLint(
 
 annotation class SuppressLint(vararg val value: String)
 
+/** Alias kept for source compatibility with android.annotation.SuppressLint. */
+@Suppress("ClassName")
+typealiasSuppressLint = SuppressLint
+
 annotation class TargetApi(vararg val value: kotlin.reflect.KClass<*>)
 
 annotation class CallSuper
