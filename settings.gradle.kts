@@ -15,7 +15,7 @@ pluginManagement {
 }
 
 dependencyResolutionManagement {
-    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositoriesMode.set(RepositoriesMode.PREFER_SETTINGS)
 
     repositories {
         google()
@@ -68,6 +68,9 @@ include(":morideobfuscator")
 // ---- Linux Desktop port (YumaPlayer for Linux Mint) ----
 include(":desktop:shims")
 include(":desktop:database")
+include(":desktop:sqlite-jdbc-factory")
+include(":desktop:runtime")
+include(":desktop:app")
 
 // Use a local copy of NewPipe Extractor by uncommenting the lines below.
 // We assume, that ArchiveTune and NewPipe Extractor have the same parent directory.
