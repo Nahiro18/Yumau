@@ -37,7 +37,7 @@ dependencies {
     // Room is consumed as a pure JVM library (the android.* APIs its -android
     // variant would need are provided by :desktop:shims at compile time).
     api("androidx.room:room-runtime-jvm:2.8.4")
-    implementation("androidx.room:room-ktx-jvm:2.8.4")
+    // room-ktx is an AAR-only artifact (Android); the JVM Room runtime already exposes coroutine suspend support.
     ksp(libs.room.compiler)
 
     implementation(libs.apache.lang3)
