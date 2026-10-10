@@ -8,8 +8,8 @@
  */
 package androidx.sqlite.db.framework
 
-import androidx.sqlite.db.SupportSQLiteDatabase
-import androidx.sqlite.db.SupportSQLiteOpenHelper
+import android.database.SupportSQLiteDatabase
+import android.database.SupportSQLiteOpenHelper
 
 class FrameworkSQLiteDatabase(
     @Suppress("unused") private val delegate: SupportSQLiteDatabase,
@@ -53,7 +53,11 @@ object DesktopSqliteBridge {
             )
     }
 
-    fun interface RoomProvider {
+    /**
+     * Not a functional interface (the builder method is generic, which SAM
+     * interfaces cannot express); implement as an object.
+     */
+    interface RoomProvider {
         fun <T : androidx.room.RoomDatabase> builderFor(
             context: android.content.Context,
             klass: Class<T>,

@@ -24,5 +24,5 @@ dependencies {
     // Room.createApplicationBuilder(klass) { factory(...) }. The generated *Impl
     // database classes come from :desktop:database at runtime; we only need the
     // abstract runtime here.
-    implementation("androidx.room:room-runtime:2.8.4")
+    implementation("androidx.room:room-runtime-jvm:2.8.4")
 }

@@ -3,7 +3,10 @@
  * Provides the tiny slice of android.database.sqlite that androidx.sqlite's
  * JVM implementation (SupportSQLiteProgram / SupportSQLiteStatement) extends on Android.
  */
-package android.database.sqlite
+package android.database
+
+import android.database.sqlite.SQLiteDatabase
+import java.io.Closeable
 
 interface SqliteCursorRow {
     fun getType(columnIndex: Int): Int
