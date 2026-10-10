@@ -38,9 +38,12 @@ object DesktopSqliteBridge {
     @Volatile
     var roomProvider: RoomProvider? = null
 
-    fun install(newFactory: SupportSQLiteOpenHelper.Factory, provider: RoomProvider) {
+    fun install(
+        newFactory: SupportSQLiteOpenHelper.Factory,
+        provider: RoomProvider? = null,
+    ) {
         factory = newFactory
-        roomProvider = provider
+        if (provider != null) roomProvider = provider
     }
 
     private object UnsupportedFactory : SupportSQLiteOpenHelper.Factory {
