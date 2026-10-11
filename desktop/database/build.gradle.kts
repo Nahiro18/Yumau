@@ -34,19 +34,22 @@ dependencies {
     // androidx.sqlite factory implementation is contributed at runtime by
     // :desktop:sqlite-jdbc-factory (wired through :desktop:app).
 
-    // Room is consumed as a pure JVM library (the android.* APIs its -android
-    // variant would need are provided by :desktop:shims at compile time).
+    // ROOT CAUSE of the KSP "MissingType" failure: androidx.room:room-compiler
+    // is a multiplatform module (android + jvm variants). On a pure-JVM project
+    // Gradle can still select the *android* variant for room-common/room-runtime
+    // via Gradle module metadata; those variants reference Android framework
+    // types absent from this classpath, so KSP2's symbol solver cannot load the
+    // androidx.room annotation classes and reports every @Dao element as
+    // referencing a missing type.
+    //
+    // Fix: steer resolution to the -jvm variants by declaring the concrete
+    // -jvm artifacts above and adding capability-based substitutions so any
+    // transitive request for the abstract module id resolves to the JVM jar.
     api("androidx.room:room-runtime-jvm:2.8.4")
-    // IMPORTANT: declare room-common-jvm explicitly. The room-runtime-jvm POM
-    // depends on the *multiplatform* `room-common` module, whose Gradle metadata
-    // redirects consumers to the -android variant; KSP's classpath analysis then
-    // cannot resolve androidx.room annotations (Dao/Database/...) and fails with
-    // "MissingType". Depending on the concrete -jvm artifact directly guarantees
-    // the annotation classes are present for both kotlinc and KSP.
     api("androidx.room:room-common-jvm:2.8.4")
     api("androidx.room:room-migration-jvm:2.8.4")
     // room-ktx is an AAR-only artifact (Android); the JVM Room runtime already exposes coroutine suspend support.
-    ksp(libs.room.compiler)
+    ksp("androidx.room:room-compiler:2.8.4")
 
     implementation(libs.apache.lang3)
     implementation(libs.kotlinx.coroutines.core)
