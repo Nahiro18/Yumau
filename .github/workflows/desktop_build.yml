@@ -55,7 +55,7 @@ jobs:
 
       - name: Build .deb and Distributable
         run: |
-          ./gradlew :desktop:app:packageDeb :desktop:app:createDistributable -PYUMA_DESKTOP_ONLY=true --stacktrace
+          ./gradlew :desktop:app:packageDeb :desktop:app:createDistributable -PYUMA_DESKTOP_ONLY=true --no-configuration-cache --stacktrace
 
       - name: Build AppImage and Organize Packages
         run: |
@@ -65,12 +65,14 @@ jobs:
           APPDIR="/tmp/YumaPlayerAppDir"
           rm -rf "$APPDIR"
           mkdir -p "$APPDIR/usr"
-          cp -r desktop/app/build/compose/binaries/main/app/YumaPlayer/* "$APPDIR/usr/"
+          cp -r desktop/app/build/compose/binaries/main/app/*/* "$APPDIR/usr/"
 
-          printf '#!/bin/sh\nHERE="$(dirname "$(readlink -f "$0")")"\nexec "$HERE/usr/bin/YumaPlayer" "$@"\n' > "$APPDIR/AppRun"
+          EXEC_NAME=$(basename "$(find "$APPDIR/usr/bin" -maxdepth 1 -type f -executable | head -n 1)")
+
+          printf '#!/bin/sh\nHERE="$(dirname "$(readlink -f "$0")")"\nexec "$HERE/usr/bin/%s" "$@"\n' "$EXEC_NAME" > "$APPDIR/AppRun"
           chmod +x "$APPDIR/AppRun"
 
-          printf '[Desktop Entry]\nType=Application\nName=YumaPlayer\nExec=YumaPlayer\nIcon=icon\nComment=YumaPlayer - Music Player for Linux Mint\nCategories=AudioVideo;Audio;Player;\nTerminal=false\n' > "$APPDIR/YumaPlayer.desktop"
+          printf '[Desktop Entry]\nType=Application\nName=YumaPlayer\nExec=%s\nIcon=icon\nComment=YumaPlayer - Music Player for Linux Mint\nCategories=AudioVideo;Audio;Player;\nTerminal=false\n' "$EXEC_NAME" > "$APPDIR/YumaPlayer.desktop"
 
           cp desktop/app/src/main/resources/icon.png "$APPDIR/icon.png"
           cp desktop/app/src/main/resources/icon.png "$APPDIR/.DirIcon"

@@ -40,7 +40,7 @@ compose.desktop {
 
         nativeDistributions {
             targetFormats(TargetFormat.Deb)
-            packageName = "YumaPlayer"
+            packageName = "yumaplayer"
             packageVersion = "1.0.0"
             description = "YumaPlayer - Music Player for Linux"
             vendor = "Nahiro18"
@@ -49,6 +49,7 @@ compose.desktop {
             linux {
                 iconFile.set(project.file("src/main/resources/icon.png"))
                 debPackageVersion = "1.0.0"
+                debMaintainer = "Nahiro18 <nahiro18@github.com>"
                 appCategory = "AudioVideo;Audio;Player;"
                 shortcut = true
                 menuGroup = "Multimedia"
