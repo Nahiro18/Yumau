@@ -44,11 +44,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y fakeroot dpkg-dev libasound2-dev libopenal-dev libgl1-mesa-dev libx11-dev libxext-dev libxrender-dev libxtst-dev libxi-dev wget file mpv
-          wget -q https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage -O /tmp/appimagetool.AppImage
-          chmod +x /tmp/appimagetool.AppImage
-          cd /tmp && /tmp/appimagetool.AppImage --appimage-extract
-          sudo mv /tmp/squashfs-root /usr/local/lib/appimagetool
-          sudo ln -s /usr/local/lib/appimagetool/AppRun /usr/local/bin/appimagetool
+          wget -q https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage -O /usr/local/bin/appimagetool
+          chmod +x /usr/local/bin/appimagetool
 
       - name: Set Up Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -70,28 +67,15 @@ jobs:
           mkdir -p "$APPDIR/usr"
           cp -r desktop/app/build/compose/binaries/main/app/YumaPlayer/* "$APPDIR/usr/"
 
-          cat << 'EOF' > "$APPDIR/AppRun"
-#!/bin/sh
-HERE="$(dirname "$(readlink -f "${0}")")"
-exec "${HERE}/usr/bin/YumaPlayer" "$@"
-EOF
+          printf '#!/bin/sh\nHERE="$(dirname "$(readlink -f "$0")")"\nexec "$HERE/usr/bin/YumaPlayer" "$@"\n' > "$APPDIR/AppRun"
           chmod +x "$APPDIR/AppRun"
 
-          cat << 'EOF' > "$APPDIR/YumaPlayer.desktop"
-[Desktop Entry]
-Type=Application
-Name=YumaPlayer
-Exec=YumaPlayer
-Icon=icon
-Comment=YumaPlayer - Music Player for Linux Mint
-Categories=AudioVideo;Audio;Player;
-Terminal=false
-EOF
+          printf '[Desktop Entry]\nType=Application\nName=YumaPlayer\nExec=YumaPlayer\nIcon=icon\nComment=YumaPlayer - Music Player for Linux Mint\nCategories=AudioVideo;Audio;Player;\nTerminal=false\n' > "$APPDIR/YumaPlayer.desktop"
 
           cp desktop/app/src/main/resources/icon.png "$APPDIR/icon.png"
           cp desktop/app/src/main/resources/icon.png "$APPDIR/.DirIcon"
 
-          ARCH=x86_64 appimagetool "$APPDIR" "dist/YumaPlayer-1.0.0-x86_64.AppImage"
+          ARCH=x86_64 /usr/local/bin/appimagetool --appimage-extract-and-run "$APPDIR" "dist/YumaPlayer-1.0.0-x86_64.AppImage"
           ls -la dist/
 
       - name: Upload Desktop Artifacts
