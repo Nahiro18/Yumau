@@ -10,9 +10,11 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.io.File
 
@@ -81,11 +83,11 @@ class DesktopPlayer(
         mpv.setProperty("volume", _volume.value)
         mpv.observeProperty("time-pos") { el ->
             val d = el?.jsonPrimitiveDoubleOrNull()
-            if (d != null) _positionMs.value = (d * 1000).toLong()
+            if (d != null && d >= 0) _positionMs.value = (d * 1000).toLong()
         }
         mpv.observeProperty("duration") { el ->
             val d = el?.jsonPrimitiveDoubleOrNull()
-            if (d != null) _durationMs.value = (d * 1000).toLong()
+            if (d != null && d > 0) _durationMs.value = (d * 1000).toLong()
         }
         mpv.observeProperty("idle-active") { el ->
             // When mpv goes idle after finishing a file, advance the queue.
@@ -93,6 +95,27 @@ class DesktopPlayer(
                 _state.value == DesktopPlayerState.PLAYING
             ) {
                 onTrackFinished()
+            }
+        }
+
+        // Active poller to guarantee real-time seekbar progress even if IPC events stall
+        scope.launch {
+            while (isActive) {
+                delay(250)
+                if (_state.value == DesktopPlayerState.PLAYING) {
+                    runCatching {
+                        val posEl = mpv.getProperty("time-pos")
+                        val posSec = posEl?.jsonPrimitiveDoubleOrNull()
+                        if (posSec != null && posSec >= 0) {
+                            _positionMs.value = (posSec * 1000).toLong()
+                        }
+                        val durEl = mpv.getProperty("duration")
+                        val durSec = durEl?.jsonPrimitiveDoubleOrNull()
+                        if (durSec != null && durSec > 0) {
+                            _durationMs.value = (durSec * 1000).toLong()
+                        }
+                    }
+                }
             }
         }
     }
@@ -118,6 +141,10 @@ class DesktopPlayer(
         if (index < 0 || index >= items.size) return
         _currentIndex.value = index
         val item = items[index]
+        _positionMs.value = 0L
+        if (item.durationMs > 0) {
+            _durationMs.value = item.durationMs
+        }
         val target = if (File(item.uri).isAbsolute) item.uri else item.uri
         scope.launch {
             runCatching {
@@ -165,8 +192,9 @@ class DesktopPlayer(
     }
 
     fun seekTo(ms: Long) {
-        mpv.commandAsync(listOf("set_property", "start", (ms / 1000.0).toString()))
         _positionMs.value = ms
+        val seconds = (ms / 1000.0).coerceAtLeast(0.0)
+        mpv.commandAsync(listOf("seek", seconds, "absolute"))
     }
 
     fun setVolume(percent: Int) {

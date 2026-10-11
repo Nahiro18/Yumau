@@ -58,6 +58,8 @@ class MpvProcess(
                 add("--idle=yes")
                 add("--force-window=no")
                 add("--video=no")
+                add("--ytdl-format=bestaudio/best")
+                add("--audio-buffer=2")
                 addAll(extraArgs)
             }
         process =

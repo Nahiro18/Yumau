@@ -23,6 +23,7 @@ dependencies {
     implementation(project(":core"))
     implementation(project(":core:innertube"))
     implementation(project(":lyrics:lrclib"))
+    implementation(project(":spotifycore"))
 
     implementation(compose.desktop.currentOs)
     implementation(compose.material3)
