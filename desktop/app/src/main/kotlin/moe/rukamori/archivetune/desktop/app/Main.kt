@@ -916,9 +916,9 @@ fun SettingsScreen() {
                                 browserAuthMessage = null
                                 DesktopSpotifyBrowserAuth.startBrowserLogin(
                                     scope = scope,
-                                    onSuccess = { token ->
+                                    onSuccess = { token, refreshToken ->
                                         scope.launch {
-                                            val res = DesktopSpotifyStore.loginWithToken(token)
+                                            val res = DesktopSpotifyStore.loginWithToken(token, refreshToken)
                                             isBrowserAuthWaiting = false
                                             if (res.isSuccess) {
                                                 browserAuthMessage = "¡Cuenta de Spotify conectada exitosamente!"

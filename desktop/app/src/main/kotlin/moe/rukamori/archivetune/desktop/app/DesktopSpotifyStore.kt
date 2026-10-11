@@ -19,11 +19,21 @@ import moe.rukamori.archivetune.spotify.models.SpotifySavedTrack
 import moe.rukamori.archivetune.spotify.models.SpotifyTrack
 import moe.rukamori.archivetune.spotify.models.SpotifyUser
 import java.io.File
+import java.net.URI
+import java.net.URLEncoder
+import java.net.http.HttpClient
+import java.net.http.HttpRequest
+import java.net.http.HttpResponse
+import java.time.Duration
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonPrimitive
 
 @Serializable
 data class SpotifySessionData(
     val spDc: String = "",
     val accessToken: String = "",
+    val refreshToken: String = "",
     val displayName: String = "",
     val email: String = "",
     val avatarUrl: String = "",
@@ -90,6 +100,7 @@ object DesktopSpotifyStore {
         val newSession = SpotifySessionData(
             spDc = cleanSpDc,
             accessToken = token.accessToken,
+            refreshToken = "",
             displayName = user?.displayName ?: "Usuario de Spotify",
             email = user?.email.orEmpty(),
             avatarUrl = user?.images?.firstOrNull()?.url.orEmpty(),
@@ -100,16 +111,23 @@ object DesktopSpotifyStore {
         Result.success(user ?: SpotifyUser(id = "spotify_user", displayName = newSession.displayName))
     }
 
-    suspend fun loginWithToken(token: String): Result<SpotifyUser> = withContext(Dispatchers.IO) {
+    suspend fun loginWithToken(token: String, refreshToken: String? = null): Result<SpotifyUser> = withContext(Dispatchers.IO) {
         val cleanToken = token.trim()
         Spotify.accessToken = cleanToken
 
         val userResult = Spotify.me()
-        val user = userResult.getOrElse { return@withContext Result.failure(it) }
+        val user = userResult.getOrElse {
+            if (cleanToken.length in 50..200 && !cleanToken.startsWith("BQ")) {
+                val spDcRes = loginWithSpDc(cleanToken)
+                if (spDcRes.isSuccess) return@withContext spDcRes
+            }
+            return@withContext Result.failure(it)
+        }
 
         val newSession = SpotifySessionData(
             spDc = "",
             accessToken = cleanToken,
+            refreshToken = refreshToken.orEmpty(),
             displayName = user.displayName ?: "Usuario de Spotify",
             email = user.email.orEmpty(),
             avatarUrl = user.images.firstOrNull()?.url.orEmpty(),
@@ -118,6 +136,42 @@ object DesktopSpotifyStore {
         _session.value = newSession
         saveSession(newSession)
         Result.success(user)
+    }
+
+    suspend fun refreshWithRefreshToken(refreshToken: String): Result<String> = withContext(Dispatchers.IO) {
+        try {
+            val formBody = buildString {
+                append("grant_type=refresh_token")
+                append("&refresh_token=").append(URLEncoder.encode(refreshToken, "UTF-8"))
+                append("&client_id=").append(URLEncoder.encode(DesktopSpotifyBrowserAuth.CLIENT_ID, "UTF-8"))
+            }
+
+            val client = HttpClient.newBuilder()
+                .connectTimeout(Duration.ofSeconds(10))
+                .build()
+            val request = HttpRequest.newBuilder()
+                .uri(URI.create("https://accounts.spotify.com/api/token"))
+                .header("Content-Type", "application/x-www-form-urlencoded")
+                .POST(HttpRequest.BodyPublishers.ofString(formBody))
+                .build()
+
+            val response = client.send(request, HttpResponse.BodyHandlers.ofString())
+            if (response.statusCode() in 200..299) {
+                val jsonTree = json.parseToJsonElement(response.body()) as? JsonObject
+                val newAccess = jsonTree?.get("access_token")?.jsonPrimitive?.content
+                if (!newAccess.isNullOrBlank()) {
+                    val newRefresh = jsonTree.get("refresh_token")?.jsonPrimitive?.contentOrNull ?: refreshToken
+                    val updated = _session.value.copy(accessToken = newAccess, refreshToken = newRefresh)
+                    _session.value = updated
+                    saveSession(updated)
+                    Spotify.accessToken = newAccess
+                    return@withContext Result.success(newAccess)
+                }
+            }
+            Result.failure(Exception("HTTP ${response.statusCode()}: ${response.body()}"))
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
     }
 
     suspend fun logout() = withContext(Dispatchers.IO) {
@@ -138,9 +192,11 @@ object DesktopSpotifyStore {
     suspend fun refreshLibrary() = withContext(Dispatchers.IO) {
         if (!_session.value.isLoggedIn) return@withContext
 
-        // Refresh token via spDc if needed
+        val refreshToken = _session.value.refreshToken
         val spDc = _session.value.spDc
-        if (spDc.isNotBlank()) {
+        if (refreshToken.isNotBlank()) {
+            refreshWithRefreshToken(refreshToken)
+        } else if (spDc.isNotBlank()) {
             val tokenRes = SpotifyAuth.fetchAccessToken(spDc)
             tokenRes.getOrNull()?.let {
                 Spotify.accessToken = it.accessToken
