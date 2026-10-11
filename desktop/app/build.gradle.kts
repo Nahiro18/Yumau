@@ -50,7 +50,7 @@ compose.desktop {
                 iconFile.set(project.file("src/main/resources/icon.png"))
                 debPackageVersion = "1.0.0"
                 debMaintainer = "Nahiro18 <nahiro18@github.com>"
-                appCategory = "AudioVideo;Audio;Player;"
+                appCategory = "sound"
                 shortcut = true
                 menuGroup = "Multimedia"
             }

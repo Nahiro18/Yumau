@@ -55,7 +55,7 @@ jobs:
 
       - name: Build .deb and Distributable
         run: |
-          ./gradlew :desktop:app:packageDeb :desktop:app:createDistributable -PYUMA_DESKTOP_ONLY=true --no-configuration-cache --stacktrace
+          ./gradlew :desktop:app:packageDeb :desktop:app:createDistributable -PYUMA_DESKTOP_ONLY=true -Dorg.gradle.configuration-cache=false --no-configuration-cache --stacktrace --info
 
       - name: Build AppImage and Organize Packages
         run: |
