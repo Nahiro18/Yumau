@@ -32,7 +32,7 @@ sourceSets {
 }
 
 ksp {
-    arg("room.schemaLocation", "$projectDir/schemas")
+    arg("room.schemaLocation", rootProject.file("database/schemas").absolutePath)
     arg("room.generateKotlin", "true")
 }
 
