@@ -56,6 +56,7 @@ dependencies {
     implementation(libs.compose.runtime)
 
     api(project(":core"))
+    api(project(":core:innertube"))
 
     // Pure-JVM SQLite driver backing androidx.sqlite on desktop
     implementation("androidx.sqlite:sqlite:2.6.2")

@@ -1,38 +1,16 @@
-/*
- * YumaPlayer Desktop (Linux) entry point.
- * Compose-for-Desktop window with a player UI mirroring the Android app's mini-player
- * and full-player layouts, driven by the mpv-backed DesktopPlayer.
- */
 package moe.rukamori.archivetune.desktop.app
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Pause
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.SkipNext
-import androidx.compose.material.icons.filled.SkipPrevious
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Slider
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -41,9 +19,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
+import kotlinx.coroutines.launch
 import moe.rukamori.archivetune.desktop.runtime.DesktopMediaItem
 import moe.rukamori.archivetune.desktop.runtime.DesktopPlayer
 import moe.rukamori.archivetune.desktop.runtime.DesktopPlayerState
+import moe.rukamori.archivetune.innertube.YouTube
+import moe.rukamori.archivetune.innertube.models.SongItem
 
 private fun formatTime(ms: Long): String {
     val total = ms / 1000
@@ -53,13 +34,6 @@ private fun formatTime(ms: Long): String {
 fun main() {
     val player = DesktopPlayer()
     player.init()
-    // Demo queue; real stream URLs are resolved through InnerTube/NewPipe (core modules).
-    player.setQueue(
-        listOf(
-            DesktopMediaItem("1", "YumaPlayer Desktop", "Linux port", "https://example.com/stream.mp3"),
-        ),
-        startIndex = -1,
-    )
 
     application {
         Window(
@@ -67,28 +41,175 @@ fun main() {
                 player.release()
                 exitApplication()
             },
-            state = rememberWindowState(width = 1100.dp, height = 720.dp),
-            title = "YumaPlayer",
+            state = rememberWindowState(width = 1180.dp, height = 760.dp),
+            title = "YumaPlayer - Linux Mint",
         ) {
-            MaterialTheme {
-                Surface(modifier = Modifier.fillMaxSize()) {
+            var searchQuery by remember { mutableStateOf("") }
+            var searchResults by remember { mutableStateOf<List<SongItem>>(emptyList()) }
+            var isLoading by remember { mutableStateOf(false) }
+            var selectedTab by remember { mutableStateOf(0) }
+            val coroutineScope = rememberCoroutineScope()
+
+            MaterialTheme(colorScheme = darkColorScheme()) {
+                Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                     Column(Modifier.fillMaxSize()) {
-                        Box(Modifier.weight(1f).fillMaxWidth().background(MaterialTheme.colorScheme.surface)) {
-                            LazyColumn(Modifier.fillMaxSize()) {
-                                items(player.queue.collectAsState().value) { item ->
-                                    Row(
-                                        Modifier
-                                            .fillMaxWidth()
-                                            .padding(12.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                    ) {
-                                        Text(item.title)
-                                        Spacer(Modifier.width(8.dp))
-                                        Text(item.artist, color = Color.Gray)
+                        TabRow(selectedTabIndex = selectedTab) {
+                            Tab(
+                                selected = selectedTab == 0,
+                                onClick = { selectedTab = 0 },
+                                text = { Text("Buscar") },
+                                icon = { Icon(Icons.Default.Search, contentDescription = "Buscar") }
+                            )
+                            Tab(
+                                selected = selectedTab == 1,
+                                onClick = { selectedTab = 1 },
+                                text = { Text("Cola de Reproducción") },
+                                icon = { Icon(Icons.Default.QueueMusic, contentDescription = "Cola") }
+                            )
+                        }
+
+                        Box(Modifier.weight(1f).fillMaxWidth().padding(16.dp)) {
+                            when (selectedTab) {
+                                0 -> {
+                                    Column(Modifier.fillMaxSize()) {
+                                        Row(
+                                            Modifier.fillMaxWidth(),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            OutlinedTextField(
+                                                value = searchQuery,
+                                                onValueChange = { searchQuery = it },
+                                                label = { Text("Buscar canciones, artistas o álbumes...") },
+                                                modifier = Modifier.weight(1f),
+                                                singleLine = true,
+                                                shape = RoundedCornerShape(12.dp)
+                                            )
+                                            Spacer(Modifier.width(12.dp))
+                                            Button(
+                                                onClick = {
+                                                    if (searchQuery.isNotBlank()) {
+                                                        isLoading = true
+                                                        coroutineScope.launch {
+                                                            try {
+                                                                val result = YouTube.search(searchQuery, filter = moe.rukamori.archivetune.innertube.SearchFilter.Song).getOrNull()
+                                                                searchResults = result?.items?.filterIsInstance<SongItem>() ?: emptyList()
+                                                            } catch (e: Exception) {
+                                                                searchResults = emptyList()
+                                                            } finally {
+                                                                isLoading = false
+                                                            }
+                                                        }
+                                                    }
+                                                },
+                                                shape = RoundedCornerShape(12.dp)
+                                            ) {
+                                                Icon(Icons.Default.Search, contentDescription = null)
+                                                Spacer(Modifier.width(6.dp))
+                                                Text("Buscar")
+                                            }
+                                        }
+
+                                        Spacer(Modifier.height(16.dp))
+
+                                        if (isLoading) {
+                                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                                CircularProgressIndicator()
+                                            }
+                                        } else if (searchResults.isEmpty()) {
+                                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                                Text("Ingresa una búsqueda para encontrar música.", color = Color.Gray)
+                                            }
+                                        } else {
+                                            LazyColumn(Modifier.fillMaxSize()) {
+                                                items(searchResults) { song ->
+                                                    Card(
+                                                        modifier = Modifier
+                                                            .fillMaxWidth()
+                                                            .padding(vertical = 4.dp)
+                                                            .clickable {
+                                                                val mediaItem = DesktopMediaItem(
+                                                                    id = song.id,
+                                                                    title = song.title,
+                                                                    artist = song.artists.joinToString(", ") { it.name },
+                                                                    mediaUrl = "https://www.youtube.com/watch?v=${song.id}"
+                                                                )
+                                                                player.setQueue(listOf(mediaItem), startIndex = 0)
+                                                                player.playPause()
+                                                            },
+                                                        shape = RoundedCornerShape(8.dp)
+                                                    ) {
+                                                        Row(
+                                                            Modifier
+                                                                .fillMaxWidth()
+                                                                .padding(12.dp),
+                                                            verticalAlignment = Alignment.CenterVertically
+                                                        ) {
+                                                            Icon(
+                                                                Icons.Default.MusicNote,
+                                                                contentDescription = null,
+                                                                tint = MaterialTheme.colorScheme.primary,
+                                                                modifier = Modifier.size(36.dp)
+                                                            )
+                                                            Spacer(Modifier.width(12.dp))
+                                                            Column(Modifier.weight(1f)) {
+                                                                Text(song.title, style = MaterialTheme.typography.titleMedium)
+                                                                Text(
+                                                                    song.artists.joinToString(", ") { it.name },
+                                                                    style = MaterialTheme.typography.bodySmall,
+                                                                    color = Color.Gray
+                                                                )
+                                                            }
+                                                            IconButton(
+                                                                onClick = {
+                                                                    val mediaItem = DesktopMediaItem(
+                                                                        id = song.id,
+                                                                        title = song.title,
+                                                                        artist = song.artists.joinToString(", ") { it.name },
+                                                                        mediaUrl = "https://www.youtube.com/watch?v=${song.id}"
+                                                                    )
+                                                                    player.setQueue(listOf(mediaItem), startIndex = 0)
+                                                                    player.playPause()
+                                                                }
+                                                            ) {
+                                                                Icon(Icons.Default.PlayArrow, contentDescription = "Reproducir")
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                1 -> {
+                                    val queue by player.queue.collectAsState()
+                                    if (queue.isEmpty()) {
+                                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                            Text("La cola de reproducción está vacía.", color = Color.Gray)
+                                        }
+                                    } else {
+                                        LazyColumn(Modifier.fillMaxSize()) {
+                                            items(queue) { item ->
+                                                Row(
+                                                    Modifier
+                                                        .fillMaxWidth()
+                                                        .padding(12.dp),
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    Icon(Icons.Default.MusicNote, contentDescription = null)
+                                                    Spacer(Modifier.width(12.dp))
+                                                    Column(Modifier.weight(1f)) {
+                                                        Text(item.title, style = MaterialTheme.typography.titleMedium)
+                                                        Text(item.artist, style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                                                    }
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }
                         }
+
                         PlayerBar(player)
                     }
                 }
@@ -97,7 +218,7 @@ fun main() {
     }
 }
 
-@androidx.compose.runtime.Composable
+@Composable
 private fun PlayerBar(player: DesktopPlayer) {
     val state by player.state.collectAsState()
     val position by player.positionMs.collectAsState()

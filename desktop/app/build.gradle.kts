@@ -24,6 +24,7 @@ dependencies {
     // the DesktopSqliteBridge hook in :desktop:shims.
     runtimeOnly(project(":desktop:sqlite-jdbc-factory"))
     implementation(project(":core"))
+    implementation(project(":core:innertube"))
 
     implementation(compose.desktop.currentOs)
     implementation(libs.kotlinx.coroutines.core)
