@@ -11,6 +11,8 @@ on:
       - 'spotifycore/**'
       - 'lyrics/**'
       - 'database/**'
+      - 'morideobfuscator/**'
+      - 'gradle/**'
       - 'build.gradle.kts'
       - 'settings.gradle.kts'
       - '.github/workflows/desktop_build.yml'

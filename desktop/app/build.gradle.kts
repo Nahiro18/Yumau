@@ -33,7 +33,6 @@ dependencies {
     implementation(compose.ui)
     implementation(compose.components.resources)
     implementation(libs.kotlinx.coroutines.core)
-    implementation(libs.kotlinx.coroutines.swing)
     implementation(libs.kotlinx.serialization.json)
 }
 
