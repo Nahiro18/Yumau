@@ -23,6 +23,7 @@ data class DesktopMediaItem(
     /** Remote URL (stream link) or local file path. */
     val uri: String,
     val durationMs: Long = 0,
+    val thumbnailUrl: String? = null,
 )
 
 enum class DesktopPlayerState { IDLE, PLAYING, PAUSED, ENDED, ERROR }
@@ -51,12 +52,29 @@ class DesktopPlayer(
     private val _volume = MutableStateFlow(100)
     val volume: StateFlow<Int> = _volume.asStateFlow()
 
-    var repeatMode: Int = 0 // 0=off, 1=all, 2=one
+    private val _repeatMode = MutableStateFlow(0)
+    val repeatModeFlow: StateFlow<Int> = _repeatMode.asStateFlow()
+    var repeatMode: Int
+        get() = _repeatMode.value
         set(value) {
-            field = value.coerceIn(0, 2)
+            _repeatMode.value = value.coerceIn(0, 2)
         }
 
-    var shuffleEnabled: Boolean = false
+    private val _shuffleEnabled = MutableStateFlow(false)
+    val shuffleEnabledFlow: StateFlow<Boolean> = _shuffleEnabled.asStateFlow()
+    var shuffleEnabled: Boolean
+        get() = _shuffleEnabled.value
+        set(value) {
+            _shuffleEnabled.value = value
+        }
+
+    fun toggleShuffle() {
+        shuffleEnabled = !shuffleEnabled
+    }
+
+    fun cycleRepeatMode() {
+        repeatMode = (repeatMode + 1) % 3
+    }
 
     fun init() {
         mpv.start()

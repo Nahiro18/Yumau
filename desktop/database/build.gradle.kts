@@ -20,14 +20,6 @@ kotlin {
 sourceSets {
     main {
         kotlin.srcDir(rootProject.file("database/src/main/kotlin"))
-        kotlin.srcDir(rootProject.file("designsystem/src/main/kotlin"))
-        kotlin.exclude(
-            "moe/rukamori/archivetune/constants/PreferenceConstants.kt",
-            "moe/rukamori/archivetune/constants/Dimensions.kt",
-            "moe/rukamori/archivetune/ui/**",
-            "moe/rukamori/archivetune/utils/**",
-            "moe/rukamori/archivetune/LocalPlayerAwareWindowInsets.kt",
-        )
     }
 }
 

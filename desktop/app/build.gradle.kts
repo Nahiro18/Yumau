@@ -3,6 +3,7 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
     alias(libs.plugins.kotlin.jvm)
+    alias(libs.plugins.kotlin.serialization)
     // Compose Multiplatform (desktop) plugin: provides the `compose.desktop.*`
     // dependency accessors and the `compose.desktop.application` DSL.
     id("org.jetbrains.compose") version "1.10.1"
@@ -25,9 +26,16 @@ dependencies {
     runtimeOnly(project(":desktop:sqlite-jdbc-factory"))
     implementation(project(":core"))
     implementation(project(":core:innertube"))
+    implementation(project(":lyrics:lrclib"))
 
     implementation(compose.desktop.currentOs)
+    implementation(compose.material3)
+    implementation(compose.materialIconsExtended)
+    implementation(compose.foundation)
+    implementation(compose.ui)
+    implementation(compose.components.resources)
     implementation(libs.kotlinx.coroutines.core)
+    implementation(libs.kotlinx.serialization.json)
 }
 
 compose.desktop {
@@ -35,7 +43,7 @@ compose.desktop {
         mainClass = "moe.rukamori.archivetune.desktop.app.MainKt"
 
         nativeDistributions {
-            targetFormats(TargetFormat.Deb, TargetFormat.AppImage)
+            targetFormats(TargetFormat.Deb)
             packageName = "YumaPlayer"
             packageVersion = "1.0.0"
             description = "YumaPlayer - Music Player for Linux"

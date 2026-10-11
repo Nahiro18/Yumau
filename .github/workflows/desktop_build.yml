@@ -43,7 +43,12 @@ jobs:
       - name: Install Linux Packaging Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y fakeroot dpkg-dev libasound2-dev libopenal-dev libgl1-mesa-dev libx11-dev libxext-dev libxrender-dev libxtst-dev libxi-dev fuse
+          sudo apt-get install -y fakeroot dpkg-dev libasound2-dev libopenal-dev libgl1-mesa-dev libx11-dev libxext-dev libxrender-dev libxtst-dev libxi-dev wget file mpv
+          wget -q https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage -O /tmp/appimagetool.AppImage
+          chmod +x /tmp/appimagetool.AppImage
+          cd /tmp && /tmp/appimagetool.AppImage --appimage-extract
+          sudo mv /tmp/squashfs-root /usr/local/lib/appimagetool
+          sudo ln -s /usr/local/lib/appimagetool/AppRun /usr/local/bin/appimagetool
 
       - name: Set Up Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -51,14 +56,42 @@ jobs:
       - name: Make Gradlew Executable
         run: chmod +x gradlew
 
-      - name: Build .deb and .AppImage Packages
+      - name: Build .deb and Distributable
         run: |
-          ./gradlew :desktop:app:packageDeb :desktop:app:packageAppImage -PYUMA_DESKTOP_ONLY=true --stacktrace
+          ./gradlew :desktop:app:packageDeb :desktop:app:createDistributable -PYUMA_DESKTOP_ONLY=true --stacktrace
 
-      - name: Find and Organize Generated Packages
+      - name: Build AppImage and Organize Packages
         run: |
           mkdir -p dist/
-          find desktop/app/build/compose/binaries/main/ -type f \( -name "*.deb" -o -name "*.AppImage" \) -exec cp {} dist/ \;
+          find desktop/app/build/compose/binaries/main/deb/ -type f -name "*.deb" -exec cp {} dist/ \;
+
+          APPDIR="/tmp/YumaPlayerAppDir"
+          rm -rf "$APPDIR"
+          mkdir -p "$APPDIR/usr"
+          cp -r desktop/app/build/compose/binaries/main/app/YumaPlayer/* "$APPDIR/usr/"
+
+          cat << 'EOF' > "$APPDIR/AppRun"
+#!/bin/sh
+HERE="$(dirname "$(readlink -f "${0}")")"
+exec "${HERE}/usr/bin/YumaPlayer" "$@"
+EOF
+          chmod +x "$APPDIR/AppRun"
+
+          cat << 'EOF' > "$APPDIR/YumaPlayer.desktop"
+[Desktop Entry]
+Type=Application
+Name=YumaPlayer
+Exec=YumaPlayer
+Icon=icon
+Comment=YumaPlayer - Music Player for Linux Mint
+Categories=AudioVideo;Audio;Player;
+Terminal=false
+EOF
+
+          cp desktop/app/src/main/resources/icon.png "$APPDIR/icon.png"
+          cp desktop/app/src/main/resources/icon.png "$APPDIR/.DirIcon"
+
+          ARCH=x86_64 appimagetool "$APPDIR" "dist/YumaPlayer-1.0.0-x86_64.AppImage"
           ls -la dist/
 
       - name: Upload Desktop Artifacts
