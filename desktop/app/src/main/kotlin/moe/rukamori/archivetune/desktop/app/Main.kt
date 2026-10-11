@@ -271,16 +271,16 @@ fun HomeScreen(player: DesktopPlayer) {
         isLoading = true
         withContext(Dispatchers.IO) {
             try {
-                val chartResult = YouTube.charts().getOrNull()
-                val songs = chartResult?.items?.filterIsInstance<SongItem>() ?: emptyList()
+                val chartResult = YouTube.getChartsPage().getOrNull()
+                val songs = chartResult?.sections?.flatMap { it.items }?.filterIsInstance<SongItem>() ?: emptyList()
                 if (songs.isNotEmpty()) {
                     exploreSongs = songs
                 } else {
-                    val fallback = YouTube.search("Top Hits 2026", filter = SearchFilter.Song).getOrNull()
+                    val fallback = YouTube.search("Top Hits 2026", filter = SearchFilter.FILTER_SONG).getOrNull()
                     exploreSongs = fallback?.items?.filterIsInstance<SongItem>() ?: emptyList()
                 }
             } catch (_: Exception) {
-                val fallback = YouTube.search("Top Music", filter = SearchFilter.Song).getOrNull()
+                val fallback = YouTube.search("Top Music", filter = SearchFilter.FILTER_SONG).getOrNull()
                 exploreSongs = fallback?.items?.filterIsInstance<SongItem>() ?: emptyList()
             } finally {
                 isLoading = false
@@ -315,7 +315,7 @@ fun HomeScreen(player: DesktopPlayer) {
                             title = song.title,
                             artist = song.artists.joinToString(", ") { it.name },
                             uri = "https://www.youtube.com/watch?v=${song.id}",
-                            thumbnailUrl = song.thumbnail?.url
+                            thumbnailUrl = song.thumbnail
                         )
                         player.setQueue(listOf(media), startIndex = 0)
                         player.playPause()
@@ -340,11 +340,11 @@ fun SearchScreen(player: DesktopPlayer) {
         scope.launch(Dispatchers.IO) {
             try {
                 val filter = when (filterType) {
-                    0 -> SearchFilter.Song
-                    1 -> SearchFilter.Album
-                    2 -> SearchFilter.Artist
-                    3 -> SearchFilter.FeaturedPlaylist
-                    else -> SearchFilter.Song
+                    0 -> SearchFilter.FILTER_SONG
+                    1 -> SearchFilter.FILTER_ALBUM
+                    2 -> SearchFilter.FILTER_ARTIST
+                    3 -> SearchFilter.FILTER_FEATURED_PLAYLIST
+                    else -> SearchFilter.FILTER_SONG
                 }
                 val res = YouTube.search(query, filter = filter).getOrNull()
                 results = res?.items?.filterIsInstance<SongItem>() ?: emptyList()
@@ -420,7 +420,7 @@ fun SearchScreen(player: DesktopPlayer) {
                             title = song.title,
                             artist = song.artists.joinToString(", ") { it.name },
                             uri = "https://www.youtube.com/watch?v=${song.id}",
-                            thumbnailUrl = song.thumbnail?.url
+                            thumbnailUrl = song.thumbnail
                         )
                         player.setQueue(listOf(media), startIndex = 0)
                         player.playPause()
@@ -700,7 +700,7 @@ fun SongRowItem(song: SongItem, onPlay: () -> Unit) {
     val favorites by DesktopLibraryStore.favorites.collectAsState()
     val isFav = favorites.any { it.id == song.id }
     val scope = rememberCoroutineScope()
-    val thumbBitmap = rememberNetworkImage(song.thumbnail?.url)
+    val thumbBitmap = rememberNetworkImage(song.thumbnail)
 
     Card(
         modifier = Modifier
@@ -750,7 +750,7 @@ fun SongRowItem(song: SongItem, onPlay: () -> Unit) {
                             id = song.id,
                             title = song.title,
                             artist = song.artists.joinToString(", ") { it.name },
-                            thumbnailUrl = song.thumbnail?.url
+                            thumbnailUrl = song.thumbnail
                         )
                     )
                 }
