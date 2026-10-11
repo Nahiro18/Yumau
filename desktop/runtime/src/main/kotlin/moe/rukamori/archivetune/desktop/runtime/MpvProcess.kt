@@ -80,12 +80,12 @@ class MpvProcess(
         while (attempt < 20) {
             try {
                 val channel = java.nio.channels.SocketChannel.open(java.net.UnixDomainSocketAddress.of(socketPath))
-                writer = channel.socket().getOutputStream()
+                writer = java.nio.channels.Channels.newOutputStream(channel)
                 val readerThread =
                     Thread {
                         try {
                             val reader =
-                                BufferedReader(InputStreamReader(channel.socket().getInputStream()))
+                                BufferedReader(InputStreamReader(java.nio.channels.Channels.newInputStream(channel)))
                             var line: String?
                             while (reader.readLine().also { line = it } != null) {
                                 handleMessage(line!!)

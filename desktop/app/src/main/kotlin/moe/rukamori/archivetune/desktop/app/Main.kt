@@ -47,7 +47,11 @@ private fun formatTime(ms: Long): String {
 
 fun main() {
     val player = DesktopPlayer()
-    player.init()
+    try {
+        player.init()
+    } catch (e: Exception) {
+        System.err.println("Warning: Player engine init failed: ${e.message}")
+    }
 
     application {
         Window(
