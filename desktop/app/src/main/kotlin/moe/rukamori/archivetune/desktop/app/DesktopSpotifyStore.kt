@@ -111,16 +111,21 @@ object DesktopSpotifyStore {
         Result.success(user ?: SpotifyUser(id = "spotify_user", displayName = newSession.displayName))
     }
 
+    private const val DEFAULT_CLIENT_ID = "d420a117a32841c2b3474932e49fb54b"
+
     suspend fun loginWithToken(token: String, refreshToken: String? = null): Result<SpotifyUser> = withContext(Dispatchers.IO) {
         val cleanToken = token.trim()
+        if (cleanToken.startsWith("AQ") || cleanToken.length in 50..250) {
+            val spDcRes = loginWithSpDc(cleanToken)
+            if (spDcRes.isSuccess) return@withContext spDcRes
+        }
+
         Spotify.accessToken = cleanToken
 
         val userResult = Spotify.me()
         val user = userResult.getOrElse {
-            if (cleanToken.length in 50..200 && !cleanToken.startsWith("BQ")) {
-                val spDcRes = loginWithSpDc(cleanToken)
-                if (spDcRes.isSuccess) return@withContext spDcRes
-            }
+            val spDcRes = loginWithSpDc(cleanToken)
+            if (spDcRes.isSuccess) return@withContext spDcRes
             return@withContext Result.failure(it)
         }
 
@@ -143,7 +148,7 @@ object DesktopSpotifyStore {
             val formBody = buildString {
                 append("grant_type=refresh_token")
                 append("&refresh_token=").append(URLEncoder.encode(refreshToken, "UTF-8"))
-                append("&client_id=").append(URLEncoder.encode(DesktopSpotifyBrowserAuth.CLIENT_ID, "UTF-8"))
+                append("&client_id=").append(URLEncoder.encode(DEFAULT_CLIENT_ID, "UTF-8"))
             }
 
             val client = HttpClient.newBuilder()

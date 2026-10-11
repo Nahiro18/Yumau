@@ -889,11 +889,11 @@ fun SettingsScreen() {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     CircularProgressIndicator(modifier = Modifier.size(20.dp), color = SpotifyBrandGreen)
                                     Spacer(Modifier.width(12.dp))
-                                    Text("Esperando inicio de sesión en tu navegador...", fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = Color.White)
+                                    Text("Detectando sesión en tu navegador...", fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = Color.White)
                                 }
                                 Spacer(Modifier.height(8.dp))
                                 Text(
-                                    "Ingresa tu correo y contraseña en la ventana del navegador. YumaPlayer detectará la sesión automáticamente.",
+                                    "Si ya tienes tu cuenta iniciada en Firefox, Chrome o Brave, se conectará al instante. Si no, inicia sesión en la ventana de Spotify.",
                                     color = Color.Gray,
                                     fontSize = 12.sp
                                 )
@@ -939,7 +939,7 @@ fun SettingsScreen() {
                         ) {
                             Icon(Icons.Default.OpenInBrowser, contentDescription = null, tint = Color.White)
                             Spacer(Modifier.width(10.dp))
-                            Text("Iniciar Sesión con Spotify desde Navegador", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                            Text("Sincronizar cuenta desde Navegador", fontWeight = FontWeight.Bold, fontSize = 14.sp)
                         }
                     }
 
