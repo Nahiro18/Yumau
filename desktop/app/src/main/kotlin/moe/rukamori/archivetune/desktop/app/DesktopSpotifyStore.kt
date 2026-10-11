@@ -32,6 +32,9 @@ import kotlinx.serialization.json.jsonPrimitive
 @Serializable
 data class SpotifySessionData(
     val spDc: String = "",
+    val spKey: String = "",
+    val spT: String = "",
+    val fullCookieHeader: String = "",
     val accessToken: String = "",
     val refreshToken: String = "",
     val displayName: String = "",
@@ -75,21 +78,17 @@ object DesktopSpotifyStore {
     }
 
     fun openBrowserLogin() {
-        val url = "https://accounts.spotify.com/login?continue=https%3A%2F%2Fopen.spotify.com%2F"
-        try {
-            if (java.awt.Desktop.isDesktopSupported() && java.awt.Desktop.getDesktop().isSupported(java.awt.Desktop.Action.BROWSE)) {
-                java.awt.Desktop.getDesktop().browse(java.net.URI(url))
-                return
-            }
-        } catch (_: Exception) {}
-        try {
-            ProcessBuilder("xdg-open", url).start()
-        } catch (_: Exception) {}
+        DesktopSpotifyBrowserAuth.openUrl(DesktopSpotifyBrowserAuth.LOGIN_URL)
     }
 
-    suspend fun loginWithSpDc(spDc: String): Result<SpotifyUser> = withContext(Dispatchers.IO) {
-        val cleanSpDc = spDc.trim()
-        val tokenResult = SpotifyAuth.fetchAccessToken(cleanSpDc)
+    suspend fun loginWithBrowserSession(session: BrowserSpotifySession): Result<SpotifyUser> = withContext(Dispatchers.IO) {
+        val cleanSpDc = session.spDc.trim()
+        val tokenResult = SpotifyAuth.fetchAccessToken(
+            spDc = cleanSpDc,
+            spKey = session.spKey.trim(),
+            spT = session.spT.trim(),
+            extraCookies = session.fullCookieHeader.trim()
+        )
         val token = tokenResult.getOrElse { return@withContext Result.failure(it) }
 
         Spotify.accessToken = token.accessToken
@@ -99,6 +98,9 @@ object DesktopSpotifyStore {
 
         val newSession = SpotifySessionData(
             spDc = cleanSpDc,
+            spKey = session.spKey.trim(),
+            spT = session.spT.trim(),
+            fullCookieHeader = session.fullCookieHeader.trim(),
             accessToken = token.accessToken,
             refreshToken = "",
             displayName = user?.displayName ?: "Usuario de Spotify",
@@ -109,6 +111,10 @@ object DesktopSpotifyStore {
         _session.value = newSession
         saveSession(newSession)
         Result.success(user ?: SpotifyUser(id = "spotify_user", displayName = newSession.displayName))
+    }
+
+    suspend fun loginWithSpDc(spDc: String): Result<SpotifyUser> = withContext(Dispatchers.IO) {
+        loginWithBrowserSession(BrowserSpotifySession(spDc = spDc, fullCookieHeader = "sp_dc=$spDc"))
     }
 
     private const val DEFAULT_CLIENT_ID = "d420a117a32841c2b3474932e49fb54b"
@@ -199,10 +205,19 @@ object DesktopSpotifyStore {
 
         val refreshToken = _session.value.refreshToken
         val spDc = _session.value.spDc
+        val spKey = _session.value.spKey
+        val spT = _session.value.spT
+        val fullCookieHeader = _session.value.fullCookieHeader
+
         if (refreshToken.isNotBlank()) {
             refreshWithRefreshToken(refreshToken)
-        } else if (spDc.isNotBlank()) {
-            val tokenRes = SpotifyAuth.fetchAccessToken(spDc)
+        } else if (spDc.isNotBlank() || fullCookieHeader.isNotBlank()) {
+            val tokenRes = SpotifyAuth.fetchAccessToken(
+                spDc = spDc,
+                spKey = spKey,
+                spT = spT,
+                extraCookies = fullCookieHeader
+            )
             tokenRes.getOrNull()?.let {
                 Spotify.accessToken = it.accessToken
                 _session.value = _session.value.copy(accessToken = it.accessToken)

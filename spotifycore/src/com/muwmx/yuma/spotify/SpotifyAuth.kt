@@ -26,6 +26,8 @@ object SpotifyAuth {
     suspend fun fetchAccessToken(
         spDc: String,
         spKey: String = "",
+        spT: String = "",
+        extraCookies: String = "",
     ): Result<SpotifyInternalToken> =
         try {
             val totpResult = SpotifyTotpGenerator.generateTotpToken()
@@ -41,10 +43,17 @@ object SpotifyAuth {
                 }
 
             val cookieHeader =
-                buildString {
-                    append("sp_dc=$spDc")
-                    if (spKey.isNotEmpty()) {
-                        append("; sp_key=$spKey")
+                if (extraCookies.isNotBlank()) {
+                    extraCookies
+                } else {
+                    buildString {
+                        append("sp_dc=$spDc")
+                        if (spKey.isNotEmpty()) {
+                            append("; sp_key=$spKey")
+                        }
+                        if (spT.isNotEmpty()) {
+                            append("; sp_t=$spT")
+                        }
                     }
                 }
 

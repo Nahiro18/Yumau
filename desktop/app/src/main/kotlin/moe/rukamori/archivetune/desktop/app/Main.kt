@@ -916,15 +916,11 @@ fun SettingsScreen() {
                                 browserAuthMessage = null
                                 DesktopSpotifyBrowserAuth.startBrowserLogin(
                                     scope = scope,
-                                    onSuccess = { token, refreshToken ->
+                                    onSuccess = { session ->
                                         scope.launch {
-                                            val res = DesktopSpotifyStore.loginWithToken(token, refreshToken)
                                             isBrowserAuthWaiting = false
-                                            if (res.isSuccess) {
-                                                browserAuthMessage = "¡Cuenta de Spotify conectada exitosamente!"
-                                            } else {
-                                                browserAuthError = res.exceptionOrNull()?.message ?: "Error al autenticar"
-                                            }
+                                            browserAuthMessage = "¡Cuenta de Spotify conectada exitosamente!"
+                                            DesktopSpotifyStore.refreshLibrary()
                                         }
                                     },
                                     onError = { err ->
@@ -940,6 +936,17 @@ fun SettingsScreen() {
                             Icon(Icons.Default.OpenInBrowser, contentDescription = null, tint = Color.White)
                             Spacer(Modifier.width(10.dp))
                             Text("Sincronizar cuenta desde Navegador", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                        }
+
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedButton(
+                            onClick = {
+                                DesktopSpotifyBrowserAuth.openUrl(DesktopSpotifyBrowserAuth.LOGIN_URL)
+                            },
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.fillMaxWidth().height(40.dp)
+                        ) {
+                            Text("Abrir Spotify en el Navegador", fontSize = 13.sp)
                         }
                     }
 

@@ -101,17 +101,13 @@ object SpotifyTotpGenerator {
 
     private suspend fun fetchServerTime(): Long =
         withContext(Dispatchers.IO) {
-            val body =
-                try {
-                    httpGet(SERVER_TIME_URL, emptyMap())
-                } catch (e: Exception) {
-                    throw Spotify.SpotifyException(
-                        503,
-                        "Failed to fetch Spotify server time: ${e.message}",
-                    )
-                }
-            val response = json.decodeFromString<ServerTimeResponse>(body)
-            response.serverTime
+            try {
+                val body = httpGet(SERVER_TIME_URL, emptyMap())
+                val response = json.decodeFromString<ServerTimeResponse>(body)
+                response.serverTime
+            } catch (_: Exception) {
+                System.currentTimeMillis() / 1000L
+            }
         }
 
     private fun generateTotp(
