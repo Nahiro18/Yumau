@@ -685,11 +685,24 @@ fun SpotifyScreen(player: DesktopPlayer) {
                         }
                     }
 
-                    Spacer(Modifier.height(20.dp))
+                    Spacer(Modifier.height(16.dp))
 
-                    Text("Opción 1: Cookie sp_dc (Recomendado)", fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = Color.White)
+                    Button(
+                        onClick = { DesktopSpotifyStore.openBrowserLogin() },
+                        colors = ButtonDefaults.buttonColors(containerColor = SpotifyBrandGreen),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth().height(48.dp)
+                    ) {
+                        Icon(Icons.Default.OpenInBrowser, contentDescription = null, tint = Color.White)
+                        Spacer(Modifier.width(10.dp))
+                        Text("1. Iniciar sesión con Correo y Contraseña en Navegador", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    }
+
+                    Spacer(Modifier.height(16.dp))
+
+                    Text("Paso 2: Conectar con Cookie de sesión sp_dc", fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = Color.White)
                     Text(
-                        "Inicia sesión en open.spotify.com, presiona F12 > Aplicación/Almacenamiento > Cookies > copia el valor de 'sp_dc'.",
+                        "Una vez que inicies sesión en tu navegador con tu correo y contraseña, presiona F12 > Almacenamiento o Aplicación > Cookies > open.spotify.com > copia el valor de 'sp_dc' y pégalo aquí:",
                         fontSize = 12.sp,
                         color = Color.Gray,
                         modifier = Modifier.padding(bottom = 8.dp)
@@ -719,7 +732,7 @@ fun SpotifyScreen(player: DesktopPlayer) {
                                 }
                             }
                         },
-                        colors = ButtonDefaults.buttonColors(containerColor = SpotifyBrandGreen),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF282542)),
                         shape = RoundedCornerShape(10.dp),
                         enabled = !isLoggingIn && spDcInput.isNotBlank()
                     ) {
@@ -728,7 +741,7 @@ fun SpotifyScreen(player: DesktopPlayer) {
                             Spacer(Modifier.width(8.dp))
                             Text("Conectando...")
                         } else {
-                            Text("Conectar con sp_dc")
+                            Text("Conectar Cuenta de Spotify")
                         }
                     }
 

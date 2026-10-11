@@ -64,6 +64,19 @@ object DesktopSpotifyStore {
         } catch (_: Exception) {}
     }
 
+    fun openBrowserLogin() {
+        val url = "https://accounts.spotify.com/login?continue=https%3A%2F%2Fopen.spotify.com%2F"
+        try {
+            if (java.awt.Desktop.isDesktopSupported() && java.awt.Desktop.getDesktop().isSupported(java.awt.Desktop.Action.BROWSE)) {
+                java.awt.Desktop.getDesktop().browse(java.net.URI(url))
+                return
+            }
+        } catch (_: Exception) {}
+        try {
+            ProcessBuilder("xdg-open", url).start()
+        } catch (_: Exception) {}
+    }
+
     suspend fun loginWithSpDc(spDc: String): Result<SpotifyUser> = withContext(Dispatchers.IO) {
         val cleanSpDc = spDc.trim()
         val tokenResult = SpotifyAuth.fetchAccessToken(cleanSpDc)

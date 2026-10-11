@@ -64,7 +64,6 @@ if (!skipAndroidModules) {
     include(":lastfm")
     include(":canvas")
     include(":shazamkit")
-    include(":spotifycore")
     include(":flaccore")
 }
 
@@ -72,6 +71,7 @@ if (!skipAndroidModules) {
 include(":core")
 include(":core:innertube")
 include(":core:audio-dsp")
+include(":spotifycore")
 include(":lyrics:kugou")
 include(":lyrics:lrclib")
 include(":lyrics:simpmusic")
