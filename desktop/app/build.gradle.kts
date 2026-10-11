@@ -1,3 +1,4 @@
+import org.jetbrains.compose.desktop.application.dsl.TargetFormat
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
@@ -31,5 +32,23 @@ dependencies {
 compose.desktop {
     application {
         mainClass = "moe.rukamori.archivetune.desktop.app.MainKt"
+
+        nativeDistributions {
+            targetFormats(TargetFormat.Deb, TargetFormat.AppImage)
+            packageName = "YumaPlayer"
+            packageVersion = "1.0.0"
+            description = "YumaPlayer - Music Player for Linux"
+            vendor = "Nahiro18"
+            copyright = "© 2026 Nahiro18"
+
+            linux {
+                iconFile.set(project.file("src/main/resources/icon.png"))
+                debPackageVersion = "1.0.0"
+                appCategory = "AudioVideo;Audio;Player;"
+                shortcut = true
+                menuGroup = "Multimedia"
+            }
+        }
     }
 }
+
