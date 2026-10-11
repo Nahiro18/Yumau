@@ -112,7 +112,9 @@ private val SpotifyBrandGreen = Color(0xFF1DB954)
 
 @Composable
 fun YumaApp(player: DesktopPlayer) {
+    // 0: Inicio, 1: Buscar, 2: Biblioteca, 3: Ajustes, 4: Letras, 5: Cola
     var selectedSection by remember { mutableStateOf(0) }
+    var previousSection by remember { mutableStateOf(0) }
     var currentLyrics by remember { mutableStateOf<List<LyricLine>>(emptyList()) }
     var rawPlainLyrics by remember { mutableStateOf<String?>(null) }
     var isLyricsLoading by remember { mutableStateOf(false) }
@@ -168,7 +170,10 @@ fun YumaApp(player: DesktopPlayer) {
                 Row(Modifier.weight(1f).fillMaxWidth()) {
                     Sidebar(
                         selectedSection = selectedSection,
-                        onSelectSection = { selectedSection = it }
+                        onSelectSection = {
+                            if (selectedSection < 4) previousSection = selectedSection
+                            selectedSection = it
+                        }
                     )
 
                     Box(
@@ -180,23 +185,44 @@ fun YumaApp(player: DesktopPlayer) {
                         when (selectedSection) {
                             0 -> HomeScreen(player = player)
                             1 -> SearchScreen(player = player)
-                            2 -> LibraryScreen(player = player)
-                            3 -> SpotifyScreen(player = player)
+                            2 -> LibraryScreen(
+                                player = player,
+                                onNavigateToSettings = { selectedSection = 3 }
+                            )
+                            3 -> SettingsScreen()
                             4 -> LyricsScreen(
                                 lyrics = currentLyrics,
                                 plainLyrics = rawPlainLyrics,
                                 isLoading = isLyricsLoading,
-                                player = player
+                                player = player,
+                                onBack = { selectedSection = previousSection }
                             )
-                            5 -> QueueScreen(player = player)
-                            6 -> SettingsScreen(onNavigateToSpotify = { selectedSection = 3 })
+                            5 -> QueueScreen(
+                                player = player,
+                                onBack = { selectedSection = previousSection }
+                            )
                         }
                     }
                 }
 
                 PlayerBar(
                     player = player,
-                    onOpenLyrics = { selectedSection = 4 }
+                    onOpenLyrics = {
+                        if (selectedSection != 4) {
+                            previousSection = selectedSection
+                            selectedSection = 4
+                        } else {
+                            selectedSection = previousSection
+                        }
+                    },
+                    onOpenQueue = {
+                        if (selectedSection != 5) {
+                            previousSection = selectedSection
+                            selectedSection = 5
+                        } else {
+                            selectedSection = previousSection
+                        }
+                    }
                 )
             }
         }
@@ -205,8 +231,6 @@ fun YumaApp(player: DesktopPlayer) {
 
 @Composable
 fun Sidebar(selectedSection: Int, onSelectSection: (Int) -> Unit) {
-    val spotifySession by DesktopSpotifyStore.session.collectAsState()
-
     Surface(
         modifier = Modifier.width(230.dp).fillMaxHeight(),
         color = Color(0xFF141720)
@@ -245,23 +269,20 @@ fun Sidebar(selectedSection: Int, onSelectSection: (Int) -> Unit) {
                     }
                 }
 
+                // Identical to mobile tabs: Inicio, Buscar, Biblioteca, Ajustes
                 val items = listOf(
                     Triple(0, "Inicio", Icons.Default.Home),
                     Triple(1, "Buscar", Icons.Default.Search),
                     Triple(2, "Biblioteca", Icons.Default.LibraryMusic),
-                    Triple(3, if (spotifySession.isLoggedIn) "Spotify" else "Spotify", Icons.Default.Radio),
-                    Triple(4, "Letras", Icons.Default.Mic),
-                    Triple(5, "Cola", Icons.AutoMirrored.Filled.QueueMusic),
-                    Triple(6, "Ajustes", Icons.Default.Settings),
+                    Triple(3, "Ajustes", Icons.Default.Settings),
                 )
 
                 items.forEach { (index, title, icon) ->
                     val isSelected = selectedSection == index
-                    val isSpotify = index == 3
                     Surface(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(vertical = 3.dp)
+                            .padding(vertical = 4.dp)
                             .clip(RoundedCornerShape(10.dp))
                             .clickable { onSelectSection(index) },
                         color = if (isSelected) Color(0xFF282542) else Color.Transparent
@@ -273,11 +294,7 @@ fun Sidebar(selectedSection: Int, onSelectSection: (Int) -> Unit) {
                             Icon(
                                 icon,
                                 contentDescription = title,
-                                tint = when {
-                                    isSpotify && spotifySession.isLoggedIn -> SpotifyBrandGreen
-                                    isSelected -> Color(0xFFA78BFA)
-                                    else -> Color(0xFF9CA3AF)
-                                },
+                                tint = if (isSelected) Color(0xFFA78BFA) else Color(0xFF9CA3AF),
                                 modifier = Modifier.size(20.dp)
                             )
                             Spacer(Modifier.width(14.dp))
@@ -288,14 +305,6 @@ fun Sidebar(selectedSection: Int, onSelectSection: (Int) -> Unit) {
                                 fontSize = 14.sp,
                                 modifier = Modifier.weight(1f)
                             )
-                            if (isSpotify && spotifySession.isLoggedIn) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(8.dp)
-                                        .clip(CircleShape)
-                                        .background(SpotifyBrandGreen)
-                                )
-                            }
                         }
                     }
                 }
@@ -346,7 +355,7 @@ fun HomeScreen(player: DesktopPlayer) {
             color = Color.White
         )
         Text(
-            "Éxitos recomendados y tendencias (Audio Opus de Alta Fidelidad)",
+            "Tendencias y recomendaciones en formato Opus de alta fidelidad",
             fontSize = 13.sp,
             color = Color(0xFF9CA3AF),
             modifier = Modifier.padding(bottom = 16.dp)
@@ -488,12 +497,25 @@ fun SearchScreen(player: DesktopPlayer) {
 }
 
 @Composable
-fun LibraryScreen(player: DesktopPlayer) {
+fun LibraryScreen(player: DesktopPlayer, onNavigateToSettings: () -> Unit) {
     var tabIndex by remember { mutableStateOf(0) }
     val favorites by DesktopLibraryStore.favorites.collectAsState()
     val history by DesktopLibraryStore.history.collectAsState()
     val playlists by DesktopLibraryStore.playlists.collectAsState()
+    val spotifySession by DesktopSpotifyStore.session.collectAsState()
+    val spotifyLiked by DesktopSpotifyStore.likedSongs.collectAsState()
+    val spotifyPlaylists by DesktopSpotifyStore.playlists.collectAsState()
     val scope = rememberCoroutineScope()
+
+    var selectedSpotifyPlaylistTracks by remember { mutableStateOf<List<SpotifyPlaylistTrack>?>(null) }
+    var selectedSpotifyPlaylistName by remember { mutableStateOf("") }
+    var isLoadingSpotifyTracks by remember { mutableStateOf(false) }
+
+    LaunchedEffect(spotifySession.isLoggedIn) {
+        if (spotifySession.isLoggedIn) {
+            DesktopSpotifyStore.refreshLibrary()
+        }
+    }
 
     Column(Modifier.fillMaxSize()) {
         TabRow(
@@ -504,6 +526,19 @@ fun LibraryScreen(player: DesktopPlayer) {
             Tab(selected = tabIndex == 0, onClick = { tabIndex = 0 }, text = { Text("Favoritos (${favorites.size})") })
             Tab(selected = tabIndex == 1, onClick = { tabIndex = 1 }, text = { Text("Historial (${history.size})") })
             Tab(selected = tabIndex == 2, onClick = { tabIndex = 2 }, text = { Text("Playlists (${playlists.size})") })
+            Tab(
+                selected = tabIndex == 3,
+                onClick = { tabIndex = 3 },
+                text = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Spotify")
+                        if (spotifySession.isLoggedIn) {
+                            Spacer(Modifier.width(6.dp))
+                            Box(modifier = Modifier.size(7.dp).clip(CircleShape).background(SpotifyBrandGreen))
+                        }
+                    }
+                }
+            )
         }
 
         Spacer(Modifier.height(16.dp))
@@ -598,347 +633,577 @@ fun LibraryScreen(player: DesktopPlayer) {
                     }
                 }
             }
+            3 -> {
+                if (!spotifySession.isLoggedIn) {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(Icons.Default.Radio, contentDescription = null, tint = SpotifyBrandGreen, modifier = Modifier.size(54.dp))
+                            Spacer(Modifier.height(16.dp))
+                            Text("Tu cuenta de Spotify no está conectada", fontWeight = FontWeight.Bold, fontSize = 18.sp, color = Color.White)
+                            Text("Conéctate fácilmente desde Ajustes con tu navegador para ver tus playlists y canciones que te gustan.", color = Color.Gray, fontSize = 13.sp)
+                            Spacer(Modifier.height(16.dp))
+                            Button(
+                                onClick = onNavigateToSettings,
+                                colors = ButtonDefaults.buttonColors(containerColor = SpotifyBrandGreen),
+                                shape = RoundedCornerShape(10.dp)
+                            ) {
+                                Text("Ir a Ajustes para Conectar")
+                            }
+                        }
+                    }
+                } else {
+                    if (selectedSpotifyPlaylistTracks != null) {
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 12.dp)) {
+                            IconButton(onClick = { selectedSpotifyPlaylistTracks = null }) {
+                                Icon(Icons.Default.ArrowBack, contentDescription = "Volver", tint = Color.White)
+                            }
+                            Spacer(Modifier.width(8.dp))
+                            Text(selectedSpotifyPlaylistName, fontWeight = FontWeight.Bold, fontSize = 18.sp, color = Color.White)
+                        }
+
+                        if (isLoadingSpotifyTracks) {
+                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                CircularProgressIndicator()
+                            }
+                        } else {
+                            LazyColumn(Modifier.fillMaxSize()) {
+                                items(selectedSpotifyPlaylistTracks.orEmpty()) { item ->
+                                    val track = item.track
+                                    if (track != null) {
+                                        SpotifyTrackRow(
+                                            track = track,
+                                            onPlay = {
+                                                scope.launch {
+                                                    val ytSong = DesktopSpotifyStore.matchSpotifyTrackToYouTube(track)
+                                                    if (ytSong != null) {
+                                                        playTrack(
+                                                            scope = scope,
+                                                            player = player,
+                                                            songId = ytSong.id,
+                                                            title = track.name,
+                                                            artist = track.artists.joinToString(", ") { it.name },
+                                                            durationSeconds = ytSong.duration ?: (track.durationMs / 1000),
+                                                            thumbnailUrl = track.album?.images?.firstOrNull()?.url ?: ytSong.thumbnail
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        var spotifySubTab by remember { mutableStateOf(0) }
+                        TabRow(
+                            selectedTabIndex = spotifySubTab,
+                            containerColor = Color.Transparent,
+                            contentColor = SpotifyBrandGreen
+                        ) {
+                            Tab(selected = spotifySubTab == 0, onClick = { spotifySubTab = 0 }, text = { Text("Canciones que me gustan (${spotifyLiked.size})") })
+                            Tab(selected = spotifySubTab == 1, onClick = { spotifySubTab = 1 }, text = { Text("Playlists de Spotify (${spotifyPlaylists.size})") })
+                        }
+                        Spacer(Modifier.height(14.dp))
+
+                        if (spotifySubTab == 0) {
+                            if (spotifyLiked.isEmpty()) {
+                                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                    Text("Cargando canciones guardadas de Spotify...", color = Color.Gray)
+                                }
+                            } else {
+                                LazyColumn(Modifier.fillMaxSize()) {
+                                    items(spotifyLiked) { saved ->
+                                        SpotifyTrackRow(
+                                            track = saved.track,
+                                            onPlay = {
+                                                scope.launch {
+                                                    val ytSong = DesktopSpotifyStore.matchSpotifyTrackToYouTube(saved.track)
+                                                    if (ytSong != null) {
+                                                        playTrack(
+                                                            scope = scope,
+                                                            player = player,
+                                                            songId = ytSong.id,
+                                                            title = saved.track.name,
+                                                            artist = saved.track.artists.joinToString(", ") { it.name },
+                                                            durationSeconds = ytSong.duration ?: (saved.track.durationMs / 1000),
+                                                            thumbnailUrl = saved.track.album?.images?.firstOrNull()?.url ?: ytSong.thumbnail
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+                        } else {
+                            if (spotifyPlaylists.isEmpty()) {
+                                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                    Text("No se encontraron playlists en tu cuenta de Spotify.", color = Color.Gray)
+                                }
+                            } else {
+                                LazyColumn(Modifier.fillMaxSize()) {
+                                    items(spotifyPlaylists) { pl ->
+                                        Card(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(vertical = 4.dp)
+                                                .clickable {
+                                                    selectedSpotifyPlaylistName = pl.name
+                                                    isLoadingSpotifyTracks = true
+                                                    selectedSpotifyPlaylistTracks = emptyList()
+                                                    scope.launch {
+                                                        selectedSpotifyPlaylistTracks = DesktopSpotifyStore.fetchPlaylistTracks(pl.id)
+                                                        isLoadingSpotifyTracks = false
+                                                    }
+                                                },
+                                            colors = CardDefaults.cardColors(containerColor = GlassCardBackground),
+                                            shape = RoundedCornerShape(10.dp)
+                                        ) {
+                                            Row(
+                                                Modifier.fillMaxWidth().padding(12.dp),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                val plThumb = rememberNetworkImage(pl.images.firstOrNull()?.url)
+                                                if (plThumb != null) {
+                                                    Image(
+                                                        bitmap = plThumb,
+                                                        contentDescription = null,
+                                                        modifier = Modifier.size(50.dp).clip(RoundedCornerShape(8.dp)),
+                                                        contentScale = ContentScale.Crop
+                                                    )
+                                                } else {
+                                                    Box(
+                                                        modifier = Modifier.size(50.dp).clip(RoundedCornerShape(8.dp)).background(Color(0xFF232730)),
+                                                        contentAlignment = Alignment.Center
+                                                    ) {
+                                                        Icon(Icons.Default.QueueMusic, contentDescription = null, tint = SpotifyBrandGreen)
+                                                    }
+                                                }
+                                                Spacer(Modifier.width(14.dp))
+                                                Column(Modifier.weight(1f)) {
+                                                    Text(pl.name, fontWeight = FontWeight.SemiBold, fontSize = 15.sp, color = Color.White)
+                                                    Text(
+                                                        "${pl.tracks?.total ?: 0} canciones • Creada por ${pl.owner?.displayName ?: "Spotify"}",
+                                                        color = Color.Gray,
+                                                        fontSize = 12.sp
+                                                    )
+                                                }
+                                                Icon(Icons.Default.ChevronRight, contentDescription = null, tint = Color.Gray)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }
 
 @Composable
-fun SpotifyScreen(player: DesktopPlayer) {
-    val session by DesktopSpotifyStore.session.collectAsState()
-    val likedSongs by DesktopSpotifyStore.likedSongs.collectAsState()
-    val playlists by DesktopSpotifyStore.playlists.collectAsState()
+fun SettingsScreen() {
+    val settings by DesktopSettingsStore.settings.collectAsState()
+    val spotifySession by DesktopSpotifyStore.session.collectAsState()
     val scope = rememberCoroutineScope()
+    var cacheBytes by remember { mutableStateOf(DesktopSettingsStore.getCacheSizeBytes()) }
+    var cacheClearedMessage by remember { mutableStateOf<String?>(null) }
 
-    var spDcInput by remember { mutableStateOf("") }
-    var tokenInput by remember { mutableStateOf("") }
-    var isLoggingIn by remember { mutableStateOf(false) }
-    var loginError by remember { mutableStateOf<String?>(null) }
-    var spotifyTabIndex by remember { mutableStateOf(0) }
-    var selectedPlaylistTracks by remember { mutableStateOf<List<SpotifyPlaylistTrack>?>(null) }
-    var selectedPlaylistName by remember { mutableStateOf("") }
-    var isLoadingPlaylistTracks by remember { mutableStateOf(false) }
+    var isBrowserAuthWaiting by remember { mutableStateOf(false) }
+    var browserAuthMessage by remember { mutableStateOf<String?>(null) }
+    var browserAuthError by remember { mutableStateOf<String?>(null) }
 
-    LaunchedEffect(session.isLoggedIn) {
-        if (session.isLoggedIn) {
-            DesktopSpotifyStore.refreshLibrary()
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+        Text("Ajustes", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = Color.White)
+        Spacer(Modifier.height(16.dp))
+
+        // Cuenta de Spotify (en Ajustes como en la versión móvil)
+        Card(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+            colors = CardDefaults.cardColors(containerColor = GlassCardBackground),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Column(Modifier.padding(18.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(CircleShape)
+                            .background(SpotifyBrandGreen),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(Icons.Default.Radio, contentDescription = null, tint = Color.White, modifier = Modifier.size(20.dp))
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    Column {
+                        Text("Cuenta de Spotify", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color.White)
+                        Text(
+                            if (spotifySession.isLoggedIn) "Conectado como ${spotifySession.displayName}" else "Inicia sesión desde tu navegador sin copiar tokens ni cookies",
+                            color = Color.Gray,
+                            fontSize = 12.sp
+                        )
+                    }
+                }
+
+                Spacer(Modifier.height(16.dp))
+
+                if (spotifySession.isLoggedIn) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text(spotifySession.displayName, fontWeight = FontWeight.SemiBold, fontSize = 15.sp, color = Color.White)
+                            Text(
+                                if (spotifySession.email.isNotBlank()) spotifySession.email else "Sesión activa de Spotify",
+                                fontSize = 12.sp,
+                                color = SpotifyBrandGreen
+                            )
+                        }
+                        Row {
+                            Button(
+                                onClick = { scope.launch { DesktopSpotifyStore.refreshLibrary() } },
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF282542))
+                            ) {
+                                Text("Sincronizar")
+                            }
+                            Spacer(Modifier.width(8.dp))
+                            OutlinedButton(
+                                onClick = { scope.launch { DesktopSpotifyStore.logout() } },
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFEF4444))
+                            ) {
+                                Text("Desconectar")
+                            }
+                        }
+                    }
+                } else {
+                    if (isBrowserAuthWaiting) {
+                        Surface(
+                            color = Color(0xFF1E232E),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)
+                        ) {
+                            Column(Modifier.padding(16.dp)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    CircularProgressIndicator(modifier = Modifier.size(20.dp), color = SpotifyBrandGreen)
+                                    Spacer(Modifier.width(12.dp))
+                                    Text("Esperando inicio de sesión en tu navegador...", fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = Color.White)
+                                }
+                                Spacer(Modifier.height(8.dp))
+                                Text(
+                                    "Ingresa tu correo y contraseña en la ventana del navegador. YumaPlayer detectará la sesión automáticamente.",
+                                    color = Color.Gray,
+                                    fontSize = 12.sp
+                                )
+                                Spacer(Modifier.height(10.dp))
+                                OutlinedButton(
+                                    onClick = {
+                                        DesktopSpotifyBrowserAuth.cancel()
+                                        isBrowserAuthWaiting = false
+                                    }
+                                ) {
+                                    Text("Cancelar")
+                                }
+                            }
+                        }
+                    } else {
+                        Button(
+                            onClick = {
+                                isBrowserAuthWaiting = true
+                                browserAuthError = null
+                                browserAuthMessage = null
+                                DesktopSpotifyBrowserAuth.startBrowserLogin(
+                                    scope = scope,
+                                    onSuccess = { token ->
+                                        scope.launch {
+                                            val res = DesktopSpotifyStore.loginWithToken(token)
+                                            isBrowserAuthWaiting = false
+                                            if (res.isSuccess) {
+                                                browserAuthMessage = "¡Cuenta de Spotify conectada exitosamente!"
+                                            } else {
+                                                browserAuthError = res.exceptionOrNull()?.message ?: "Error al autenticar"
+                                            }
+                                        }
+                                    },
+                                    onError = { err ->
+                                        isBrowserAuthWaiting = false
+                                        browserAuthError = err
+                                    }
+                                )
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = SpotifyBrandGreen),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.fillMaxWidth().height(46.dp)
+                        ) {
+                            Icon(Icons.Default.OpenInBrowser, contentDescription = null, tint = Color.White)
+                            Spacer(Modifier.width(10.dp))
+                            Text("Iniciar Sesión con Spotify desde Navegador", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                        }
+                    }
+
+                    if (browserAuthMessage != null) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(browserAuthMessage!!, color = Color(0xFF10B981), fontSize = 13.sp)
+                    }
+                    if (browserAuthError != null) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(browserAuthError!!, color = Color(0xFFEF4444), fontSize = 13.sp)
+                    }
+                }
+            }
+        }
+
+        // Calidad de Audio y Streaming (igual a opciones de la app)
+        Card(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+            colors = CardDefaults.cardColors(containerColor = GlassCardBackground),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Column(Modifier.padding(18.dp)) {
+                Text("Calidad de Audio y Streaming", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color.White)
+                Text("Flujo de audio Opus de alta calidad extraído directamente como en la versión móvil", color = Color.Gray, fontSize = 12.sp)
+                Spacer(Modifier.height(14.dp))
+
+                Text("Resolución de Audio:", fontWeight = FontWeight.Medium, fontSize = 14.sp)
+                Row(Modifier.padding(vertical = 8.dp)) {
+                    listOf(
+                        "HIGH" to "Alta (Opus 160 kbps)",
+                        "MEDIUM" to "Media (128 kbps)",
+                        "LOW" to "Baja (50-70 kbps)"
+                    ).forEach { (code, label) ->
+                        FilterChip(
+                            selected = settings.audioQuality == code,
+                            onClick = {
+                                scope.launch {
+                                    DesktopSettingsStore.updateSettings { it.copy(audioQuality = code) }
+                                }
+                            },
+                            label = { Text(label) },
+                            modifier = Modifier.padding(end = 8.dp)
+                        )
+                    }
+                }
+
+                Spacer(Modifier.height(8.dp))
+                Text("Cliente de Extracción YouTube:", fontWeight = FontWeight.Medium, fontSize = 14.sp)
+                Row(Modifier.padding(vertical = 8.dp)) {
+                    listOf(
+                        "ANDROID_VR" to "Android VR (Sin restricciones)",
+                        "IOS" to "iOS",
+                        "WEB_REMIX" to "Web Remix"
+                    ).forEach { (code, label) ->
+                        FilterChip(
+                            selected = settings.streamingClient == code,
+                            onClick = {
+                                scope.launch {
+                                    DesktopSettingsStore.updateSettings { it.copy(streamingClient = code) }
+                                }
+                            },
+                            label = { Text(label) },
+                            modifier = Modifier.padding(end = 8.dp)
+                        )
+                    }
+                }
+
+                Spacer(Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text("Normalización de Volumen", fontWeight = FontWeight.Medium, fontSize = 14.sp)
+                        Text("Nivelación de ganancia ReplayGain para un volumen uniforme", fontSize = 12.sp, color = Color.Gray)
+                    }
+                    Switch(
+                        checked = settings.volumeNormalization,
+                        onCheckedChange = { checked ->
+                            scope.launch {
+                                DesktopSettingsStore.updateSettings { it.copy(volumeNormalization = checked) }
+                            }
+                        }
+                    )
+                }
+            }
+        }
+
+        // Almacenamiento y Caché
+        Card(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+            colors = CardDefaults.cardColors(containerColor = GlassCardBackground),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Column(Modifier.padding(18.dp)) {
+                Text("Almacenamiento y Caché", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color.White)
+                Spacer(Modifier.height(8.dp))
+                Text("Espacio utilizado en caché de carátulas y metadatos: ${cacheBytes / 1024} KB", color = Color(0xFFD1D5DB), fontSize = 14.sp)
+                Spacer(Modifier.height(12.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Button(
+                        onClick = {
+                            scope.launch {
+                                DesktopSettingsStore.clearCache()
+                                cacheBytes = DesktopSettingsStore.getCacheSizeBytes()
+                                cacheClearedMessage = "Caché limpiada con éxito"
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF374151))
+                    ) {
+                        Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Limpiar Caché")
+                    }
+                    if (cacheClearedMessage != null) {
+                        Spacer(Modifier.width(12.dp))
+                        Text(cacheClearedMessage!!, color = Color(0xFF10B981), fontSize = 13.sp)
+                    }
+                }
+            }
+        }
+
+        // Información del Sistema
+        Card(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+            colors = CardDefaults.cardColors(containerColor = GlassCardBackground),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Column(Modifier.padding(18.dp)) {
+                Text("Acerca de YumaPlayer", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color.White)
+                Spacer(Modifier.height(8.dp))
+                Text("Motor de Audio: MPV IPC Nativo (Hi-Res Lossless & Opus directo)", color = Color(0xFFD1D5DB), fontSize = 13.sp)
+                Text("Sistema Operativo: Linux Mint / Distribuciones Linux (x86_64)", color = Color(0xFF9CA3AF), fontSize = 13.sp)
+                Text("Líricas Sincronizadas: LRCLIB API", color = Color(0xFF9CA3AF), fontSize = 13.sp)
+            }
+        }
+    }
+}
+
+@Composable
+fun LyricsScreen(
+    lyrics: List<LyricLine>,
+    plainLyrics: String?,
+    isLoading: Boolean,
+    player: DesktopPlayer,
+    onBack: () -> Unit
+) {
+    val position by player.positionMs.collectAsState()
+    val currentLineIndex = remember(lyrics, position) {
+        LyricsParser.getCurrentLineIndex(lyrics, position)
+    }
+    val listState = rememberLazyListState()
+
+    LaunchedEffect(currentLineIndex) {
+        if (currentLineIndex >= 0) {
+            val target = (currentLineIndex - 2).coerceAtLeast(0)
+            listState.animateScrollToItem(target)
         }
     }
 
     Column(Modifier.fillMaxSize()) {
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column {
-                Text("Spotify", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                Text(
-                    if (session.isLoggedIn) "Conectado como ${session.displayName}" else "Conecta tu cuenta para acceder a tus canciones y playlists",
-                    color = Color.Gray,
-                    fontSize = 13.sp
-                )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onBack) {
+                Icon(Icons.Default.ArrowBack, contentDescription = "Volver", tint = Color.White)
             }
-            if (session.isLoggedIn) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Button(
-                        onClick = { scope.launch { DesktopSpotifyStore.refreshLibrary() } },
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF282542))
-                    ) {
-                        Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text("Actualizar")
-                    }
-                    Spacer(Modifier.width(8.dp))
-                    OutlinedButton(
-                        onClick = { scope.launch { DesktopSpotifyStore.logout() } },
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFEF4444))
-                    ) {
-                        Text("Cerrar Sesión")
-                    }
-                }
-            }
+            Spacer(Modifier.width(8.dp))
+            Text("Letras de la Canción", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = Color.White)
         }
-
         Spacer(Modifier.height(16.dp))
 
-        if (!session.isLoggedIn) {
-            Card(
-                modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
-                colors = CardDefaults.cardColors(containerColor = GlassCardBackground),
-                shape = RoundedCornerShape(16.dp)
+        if (isLoading) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator()
+            }
+        } else if (lyrics.isNotEmpty()) {
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.fillMaxSize(),
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Column(Modifier.padding(24.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(
-                            modifier = Modifier
-                                .size(44.dp)
-                                .clip(CircleShape)
-                                .background(SpotifyBrandGreen),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(Icons.Default.Radio, contentDescription = null, tint = Color.White)
-                        }
-                        Spacer(Modifier.width(16.dp))
-                        Column {
-                            Text("Iniciar Sesión en Spotify", fontWeight = FontWeight.Bold, fontSize = 18.sp, color = Color.White)
-                            Text("Usa tu cookie sp_dc o Access Token para sincronizar tus canciones", color = Color(0xFF9CA3AF), fontSize = 13.sp)
-                        }
-                    }
-
-                    Spacer(Modifier.height(16.dp))
-
-                    Button(
-                        onClick = { DesktopSpotifyStore.openBrowserLogin() },
-                        colors = ButtonDefaults.buttonColors(containerColor = SpotifyBrandGreen),
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.fillMaxWidth().height(48.dp)
-                    ) {
-                        Icon(Icons.Default.OpenInBrowser, contentDescription = null, tint = Color.White)
-                        Spacer(Modifier.width(10.dp))
-                        Text("1. Iniciar sesión con Correo y Contraseña en Navegador", fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                    }
-
-                    Spacer(Modifier.height(16.dp))
-
-                    Text("Paso 2: Conectar con Cookie de sesión sp_dc", fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = Color.White)
+                itemsIndexed(lyrics) { idx, line ->
+                    val isCurrent = idx == currentLineIndex
                     Text(
-                        "Una vez que inicies sesión en tu navegador con tu correo y contraseña, presiona F12 > Almacenamiento o Aplicación > Cookies > open.spotify.com > copia el valor de 'sp_dc' y pégalo aquí:",
-                        fontSize = 12.sp,
-                        color = Color.Gray,
-                        modifier = Modifier.padding(bottom = 8.dp)
+                        line.text,
+                        fontSize = if (isCurrent) 22.sp else 16.sp,
+                        fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
+                        color = if (isCurrent) Color(0xFFA78BFA) else Color(0xFF6B7280),
+                        modifier = Modifier
+                            .padding(vertical = 10.dp)
+                            .clickable { player.seekTo(line.timestampMs) }
                     )
-                    OutlinedTextField(
-                        value = spDcInput,
-                        onValueChange = { spDcInput = it },
-                        placeholder = { Text("Pega tu cookie sp_dc aquí...") },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true,
-                        shape = RoundedCornerShape(10.dp)
+                }
+            }
+        } else if (!plainLyrics.isNullOrBlank()) {
+            LazyColumn(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
+                item {
+                    Text(
+                        plainLyrics,
+                        fontSize = 16.sp,
+                        color = Color(0xFFD1D5DB),
+                        modifier = Modifier.padding(16.dp)
                     )
-
-                    Spacer(Modifier.height(12.dp))
-
-                    Button(
-                        onClick = {
-                            if (spDcInput.isNotBlank()) {
-                                isLoggingIn = true
-                                loginError = null
-                                scope.launch {
-                                    val res = DesktopSpotifyStore.loginWithSpDc(spDcInput)
-                                    isLoggingIn = false
-                                    if (res.isFailure) {
-                                        loginError = res.exceptionOrNull()?.message ?: "Error al iniciar sesión"
-                                    }
-                                }
-                            }
-                        },
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF282542)),
-                        shape = RoundedCornerShape(10.dp),
-                        enabled = !isLoggingIn && spDcInput.isNotBlank()
-                    ) {
-                        if (isLoggingIn) {
-                            CircularProgressIndicator(modifier = Modifier.size(18.dp), color = Color.White)
-                            Spacer(Modifier.width(8.dp))
-                            Text("Conectando...")
-                        } else {
-                            Text("Conectar Cuenta de Spotify")
-                        }
-                    }
-
-                    Spacer(Modifier.height(24.dp))
-                    HorizontalDivider(color = Color(0x22FFFFFF))
-                    Spacer(Modifier.height(16.dp))
-
-                    Text("Opción 2: Access Token directo", fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = Color.White)
-                    OutlinedTextField(
-                        value = tokenInput,
-                        onValueChange = { tokenInput = it },
-                        placeholder = { Text("Pega tu token de acceso (Bearer) aquí...") },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true,
-                        shape = RoundedCornerShape(10.dp)
-                    )
-                    Spacer(Modifier.height(10.dp))
-                    Button(
-                        onClick = {
-                            if (tokenInput.isNotBlank()) {
-                                isLoggingIn = true
-                                loginError = null
-                                scope.launch {
-                                    val res = DesktopSpotifyStore.loginWithToken(tokenInput)
-                                    isLoggingIn = false
-                                    if (res.isFailure) {
-                                        loginError = res.exceptionOrNull()?.message ?: "Token inválido"
-                                    }
-                                }
-                            }
-                        },
-                        shape = RoundedCornerShape(10.dp),
-                        enabled = !isLoggingIn && tokenInput.isNotBlank()
-                    ) {
-                        Text("Conectar con Token")
-                    }
-
-                    if (loginError != null) {
-                        Spacer(Modifier.height(12.dp))
-                        Text(loginError!!, color = Color(0xFFEF4444), fontSize = 13.sp)
-                    }
                 }
             }
         } else {
-            if (selectedPlaylistTracks != null) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(bottom = 12.dp)
-                ) {
-                    IconButton(onClick = { selectedPlaylistTracks = null }) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Volver", tint = Color.White)
-                    }
-                    Spacer(Modifier.width(8.dp))
-                    Text(selectedPlaylistName, fontWeight = FontWeight.Bold, fontSize = 18.sp, color = Color.White)
-                }
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text("No hay letras disponibles para la pista actual.", color = Color.Gray)
+            }
+        }
+    }
+}
 
-                if (isLoadingPlaylistTracks) {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator()
-                    }
-                } else {
-                    LazyColumn(Modifier.fillMaxSize()) {
-                        items(selectedPlaylistTracks.orEmpty()) { item ->
-                            val track = item.track
-                            if (track != null) {
-                                SpotifyTrackRow(
-                                    track = track,
-                                    onPlay = {
-                                        scope.launch {
-                                            val ytSong = DesktopSpotifyStore.matchSpotifyTrackToYouTube(track)
-                                            if (ytSong != null) {
-                                                playTrack(
-                                                    scope = scope,
-                                                    player = player,
-                                                    songId = ytSong.id,
-                                                    title = track.name,
-                                                    artist = track.artists.joinToString(", ") { it.name },
-                                                    durationSeconds = ytSong.duration ?: (track.durationMs / 1000),
-                                                    thumbnailUrl = track.album?.images?.firstOrNull()?.url ?: ytSong.thumbnail
-                                                )
-                                            }
-                                        }
-                                    }
+@Composable
+fun QueueScreen(player: DesktopPlayer, onBack: () -> Unit) {
+    val queue by player.queue.collectAsState()
+    val currentIndex by player.currentIndex.collectAsState()
+
+    Column(Modifier.fillMaxSize()) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onBack) {
+                Icon(Icons.Default.ArrowBack, contentDescription = "Volver", tint = Color.White)
+            }
+            Spacer(Modifier.width(8.dp))
+            Text("Cola de Reproducción (${queue.size})", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = Color.White)
+        }
+        Spacer(Modifier.height(16.dp))
+
+        if (queue.isEmpty()) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text("La cola está vacía", color = Color.Gray)
+            }
+        } else {
+            LazyColumn(Modifier.fillMaxSize()) {
+                itemsIndexed(queue) { idx, item ->
+                    val isPlaying = idx == currentIndex
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp)
+                            .clickable { player.playIndex(idx) },
+                        colors = CardDefaults.cardColors(
+                            containerColor = if (isPlaying) Color(0xFF2E274A) else GlassCardBackground
+                        )
+                    ) {
+                        Row(
+                            Modifier.fillMaxWidth().padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                "${idx + 1}",
+                                color = if (isPlaying) MaterialTheme.colorScheme.primary else Color.Gray,
+                                modifier = Modifier.width(30.dp)
+                            )
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    item.title,
+                                    fontWeight = if (isPlaying) FontWeight.Bold else FontWeight.Normal,
+                                    color = if (isPlaying) Color(0xFFA78BFA) else Color.White
                                 )
+                                Text(item.artist, color = Color.Gray, fontSize = 12.sp)
                             }
-                        }
-                    }
-                }
-            } else {
-                TabRow(
-                    selectedTabIndex = spotifyTabIndex,
-                    containerColor = Color.Transparent,
-                    contentColor = SpotifyBrandGreen
-                ) {
-                    Tab(
-                        selected = spotifyTabIndex == 0,
-                        onClick = { spotifyTabIndex = 0 },
-                        text = { Text("Canciones que me gustan (${likedSongs.size})") }
-                    )
-                    Tab(
-                        selected = spotifyTabIndex == 1,
-                        onClick = { spotifyTabIndex = 1 },
-                        text = { Text("Mis Playlists (${playlists.size})") }
-                    )
-                }
-
-                Spacer(Modifier.height(14.dp))
-
-                when (spotifyTabIndex) {
-                    0 -> {
-                        if (likedSongs.isEmpty()) {
-                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                Text("No se encontraron canciones guardadas o la biblioteca está cargando...", color = Color.Gray)
-                            }
-                        } else {
-                            LazyColumn(Modifier.fillMaxSize()) {
-                                items(likedSongs) { saved ->
-                                    SpotifyTrackRow(
-                                        track = saved.track,
-                                        onPlay = {
-                                            scope.launch {
-                                                val ytSong = DesktopSpotifyStore.matchSpotifyTrackToYouTube(saved.track)
-                                                if (ytSong != null) {
-                                                    playTrack(
-                                                        scope = scope,
-                                                        player = player,
-                                                        songId = ytSong.id,
-                                                        title = saved.track.name,
-                                                        artist = saved.track.artists.joinToString(", ") { it.name },
-                                                        durationSeconds = ytSong.duration ?: (saved.track.durationMs / 1000),
-                                                        thumbnailUrl = saved.track.album?.images?.firstOrNull()?.url ?: ytSong.thumbnail
-                                                    )
-                                                }
-                                            }
-                                        }
-                                    )
-                                }
-                            }
-                        }
-                    }
-                    1 -> {
-                        if (playlists.isEmpty()) {
-                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                Text("No hay playlists de Spotify encontradas.", color = Color.Gray)
-                            }
-                        } else {
-                            LazyColumn(Modifier.fillMaxSize()) {
-                                items(playlists) { pl ->
-                                    Card(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(vertical = 4.dp)
-                                            .clickable {
-                                                selectedPlaylistName = pl.name
-                                                isLoadingPlaylistTracks = true
-                                                selectedPlaylistTracks = emptyList()
-                                                scope.launch {
-                                                    selectedPlaylistTracks = DesktopSpotifyStore.fetchPlaylistTracks(pl.id)
-                                                    isLoadingPlaylistTracks = false
-                                                }
-                                            },
-                                        colors = CardDefaults.cardColors(containerColor = GlassCardBackground),
-                                        shape = RoundedCornerShape(10.dp)
-                                    ) {
-                                        Row(
-                                            Modifier.fillMaxWidth().padding(12.dp),
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            val plThumb = rememberNetworkImage(pl.images.firstOrNull()?.url)
-                                            if (plThumb != null) {
-                                                Image(
-                                                    bitmap = plThumb,
-                                                    contentDescription = null,
-                                                    modifier = Modifier.size(50.dp).clip(RoundedCornerShape(8.dp)),
-                                                    contentScale = ContentScale.Crop
-                                                )
-                                            } else {
-                                                Box(
-                                                    modifier = Modifier.size(50.dp).clip(RoundedCornerShape(8.dp)).background(Color(0xFF232730)),
-                                                    contentAlignment = Alignment.Center
-                                                ) {
-                                                    Icon(Icons.Default.QueueMusic, contentDescription = null, tint = SpotifyBrandGreen)
-                                                }
-                                            }
-                                            Spacer(Modifier.width(14.dp))
-                                            Column(Modifier.weight(1f)) {
-                                                Text(pl.name, fontWeight = FontWeight.SemiBold, fontSize = 15.sp, color = Color.White)
-                                                Text(
-                                                    "${pl.tracks?.total ?: 0} canciones • Creada por ${pl.owner?.displayName ?: "Spotify"}",
-                                                    color = Color.Gray,
-                                                    fontSize = 12.sp
-                                                )
-                                            }
-                                            Icon(Icons.Default.ChevronRight, contentDescription = null, tint = Color.Gray)
-                                        }
-                                    }
-                                }
+                            if (isPlaying) {
+                                Icon(Icons.Default.VolumeUp, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                             }
                         }
                     }
@@ -1002,312 +1267,6 @@ fun SpotifyTrackRow(track: SpotifyTrack, onPlay: () -> Unit) {
 
             IconButton(onClick = onPlay) {
                 Icon(Icons.Default.PlayArrow, contentDescription = "Reproducir", tint = MaterialTheme.colorScheme.primary)
-            }
-        }
-    }
-}
-
-@Composable
-fun LyricsScreen(
-    lyrics: List<LyricLine>,
-    plainLyrics: String?,
-    isLoading: Boolean,
-    player: DesktopPlayer
-) {
-    val position by player.positionMs.collectAsState()
-    val currentLineIndex = remember(lyrics, position) {
-        LyricsParser.getCurrentLineIndex(lyrics, position)
-    }
-    val listState = rememberLazyListState()
-
-    LaunchedEffect(currentLineIndex) {
-        if (currentLineIndex >= 0) {
-            val target = (currentLineIndex - 2).coerceAtLeast(0)
-            listState.animateScrollToItem(target)
-        }
-    }
-
-    Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
-        Text("Letras de la Canción", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = Color.White)
-        Spacer(Modifier.height(16.dp))
-
-        if (isLoading) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator()
-            }
-        } else if (lyrics.isNotEmpty()) {
-            LazyColumn(
-                state = listState,
-                modifier = Modifier.fillMaxSize(),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                itemsIndexed(lyrics) { idx, line ->
-                    val isCurrent = idx == currentLineIndex
-                    Text(
-                        line.text,
-                        fontSize = if (isCurrent) 22.sp else 16.sp,
-                        fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
-                        color = if (isCurrent) Color(0xFFA78BFA) else Color(0xFF6B7280),
-                        modifier = Modifier
-                            .padding(vertical = 10.dp)
-                            .clickable { player.seekTo(line.timestampMs) }
-                    )
-                }
-            }
-        } else if (!plainLyrics.isNullOrBlank()) {
-            LazyColumn(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
-                item {
-                    Text(
-                        plainLyrics,
-                        fontSize = 16.sp,
-                        color = Color(0xFFD1D5DB),
-                        modifier = Modifier.padding(16.dp)
-                    )
-                }
-            }
-        } else {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("No hay letras disponibles para la pista actual.", color = Color.Gray)
-            }
-        }
-    }
-}
-
-@Composable
-fun QueueScreen(player: DesktopPlayer) {
-    val queue by player.queue.collectAsState()
-    val currentIndex by player.currentIndex.collectAsState()
-
-    Column(Modifier.fillMaxSize()) {
-        Text("Cola de Reproducción (${queue.size})", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = Color.White)
-        Spacer(Modifier.height(16.dp))
-
-        if (queue.isEmpty()) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("La cola está vacía", color = Color.Gray)
-            }
-        } else {
-            LazyColumn(Modifier.fillMaxSize()) {
-                itemsIndexed(queue) { idx, item ->
-                    val isPlaying = idx == currentIndex
-                    Card(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 4.dp)
-                            .clickable { player.playIndex(idx) },
-                        colors = CardDefaults.cardColors(
-                            containerColor = if (isPlaying) Color(0xFF2E274A) else GlassCardBackground
-                        )
-                    ) {
-                        Row(
-                            Modifier.fillMaxWidth().padding(12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                "${idx + 1}",
-                                color = if (isPlaying) MaterialTheme.colorScheme.primary else Color.Gray,
-                                modifier = Modifier.width(30.dp)
-                            )
-                            Column(Modifier.weight(1f)) {
-                                Text(
-                                    item.title,
-                                    fontWeight = if (isPlaying) FontWeight.Bold else FontWeight.Normal,
-                                    color = if (isPlaying) Color(0xFFA78BFA) else Color.White
-                                )
-                                Text(item.artist, color = Color.Gray, fontSize = 12.sp)
-                            }
-                            if (isPlaying) {
-                                Icon(Icons.Default.VolumeUp, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun SettingsScreen(onNavigateToSpotify: () -> Unit) {
-    val settings by DesktopSettingsStore.settings.collectAsState()
-    val spotifySession by DesktopSpotifyStore.session.collectAsState()
-    val scope = rememberCoroutineScope()
-    var cacheBytes by remember { mutableStateOf(DesktopSettingsStore.getCacheSizeBytes()) }
-    var cacheClearedMessage by remember { mutableStateOf<String?>(null) }
-
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-        Text("Ajustes de la Aplicación", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = Color.White)
-        Spacer(Modifier.height(16.dp))
-
-        // Calidad de Audio y Streaming
-        Card(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
-            colors = CardDefaults.cardColors(containerColor = GlassCardBackground),
-            shape = RoundedCornerShape(12.dp)
-        ) {
-            Column(Modifier.padding(18.dp)) {
-                Text("Calidad de Audio y Streaming", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color.White)
-                Text("Controla el formato y la resolución de audio entregado por la app", color = Color.Gray, fontSize = 12.sp)
-                Spacer(Modifier.height(14.dp))
-
-                Text("Formato de Audio:", fontWeight = FontWeight.Medium, fontSize = 14.sp)
-                Row(Modifier.padding(vertical = 8.dp)) {
-                    listOf(
-                        "HIGH" to "Alta (Opus 160 kbps)",
-                        "MEDIUM" to "Media (128 kbps)",
-                        "LOW" to "Baja (50-70 kbps)"
-                    ).forEach { (code, label) ->
-                        FilterChip(
-                            selected = settings.audioQuality == code,
-                            onClick = {
-                                scope.launch {
-                                    DesktopSettingsStore.updateSettings { it.copy(audioQuality = code) }
-                                }
-                            },
-                            label = { Text(label) },
-                            modifier = Modifier.padding(end = 8.dp)
-                        )
-                    }
-                }
-
-                Spacer(Modifier.height(8.dp))
-                Text("Cliente de Extracción YouTube:", fontWeight = FontWeight.Medium, fontSize = 14.sp)
-                Row(Modifier.padding(vertical = 8.dp)) {
-                    listOf(
-                        "ANDROID_VR" to "Android VR (Óptimo)",
-                        "IOS" to "iOS",
-                        "WEB_REMIX" to "Web Remix"
-                    ).forEach { (code, label) ->
-                        FilterChip(
-                            selected = settings.streamingClient == code,
-                            onClick = {
-                                scope.launch {
-                                    DesktopSettingsStore.updateSettings { it.copy(streamingClient = code) }
-                                }
-                            },
-                            label = { Text(label) },
-                            modifier = Modifier.padding(end = 8.dp)
-                        )
-                    }
-                }
-
-                Spacer(Modifier.height(8.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column {
-                        Text("Normalización de Volumen", fontWeight = FontWeight.Medium, fontSize = 14.sp)
-                        Text("Ajusta automáticamente el volumen para evitar saltos bruscos", fontSize = 12.sp, color = Color.Gray)
-                    }
-                    Switch(
-                        checked = settings.volumeNormalization,
-                        onCheckedChange = { checked ->
-                            scope.launch {
-                                DesktopSettingsStore.updateSettings { it.copy(volumeNormalization = checked) }
-                            }
-                        }
-                    )
-                }
-            }
-        }
-
-        // Cuenta de Spotify
-        Card(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
-            colors = CardDefaults.cardColors(containerColor = GlassCardBackground),
-            shape = RoundedCornerShape(12.dp)
-        ) {
-            Column(Modifier.padding(18.dp)) {
-                Text("Cuenta de Spotify", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color.White)
-                Spacer(Modifier.height(8.dp))
-
-                if (spotifySession.isLoggedIn) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column {
-                            Text("Conectado como ${spotifySession.displayName}", fontWeight = FontWeight.Medium, fontSize = 14.sp)
-                            Text(if (spotifySession.email.isNotBlank()) spotifySession.email else "Sesión activa", fontSize = 12.sp, color = SpotifyBrandGreen)
-                        }
-                        OutlinedButton(
-                            onClick = { scope.launch { DesktopSpotifyStore.logout() } },
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFEF4444))
-                        ) {
-                            Text("Desconectar")
-                        }
-                    }
-                } else {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column {
-                            Text("No has conectado tu cuenta de Spotify", fontSize = 14.sp, color = Color.Gray)
-                            Text("Accede a tus playlists y canciones favoritas", fontSize = 12.sp, color = Color.Gray)
-                        }
-                        Button(
-                            onClick = onNavigateToSpotify,
-                            colors = ButtonDefaults.buttonColors(containerColor = SpotifyBrandGreen)
-                        ) {
-                            Text("Conectar")
-                        }
-                    }
-                }
-            }
-        }
-
-        // Almacenamiento y Caché
-        Card(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
-            colors = CardDefaults.cardColors(containerColor = GlassCardBackground),
-            shape = RoundedCornerShape(12.dp)
-        ) {
-            Column(Modifier.padding(18.dp)) {
-                Text("Almacenamiento y Caché", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color.White)
-                Spacer(Modifier.height(8.dp))
-                Text("Espacio utilizado en caché de carátulas y datos: ${cacheBytes / 1024} KB", color = Color(0xFFD1D5DB), fontSize = 14.sp)
-                Spacer(Modifier.height(12.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Button(
-                        onClick = {
-                            scope.launch {
-                                DesktopSettingsStore.clearCache()
-                                cacheBytes = DesktopSettingsStore.getCacheSizeBytes()
-                                cacheClearedMessage = "Caché limpiada con éxito"
-                            }
-                        },
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF374151))
-                    ) {
-                        Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text("Limpiar Caché")
-                    }
-                    if (cacheClearedMessage != null) {
-                        Spacer(Modifier.width(12.dp))
-                        Text(cacheClearedMessage!!, color = Color(0xFF10B981), fontSize = 13.sp)
-                    }
-                }
-            }
-        }
-
-        // Información del Sistema
-        Card(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
-            colors = CardDefaults.cardColors(containerColor = GlassCardBackground),
-            shape = RoundedCornerShape(12.dp)
-        ) {
-            Column(Modifier.padding(18.dp)) {
-                Text("Acerca de YumaPlayer", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color.White)
-                Spacer(Modifier.height(8.dp))
-                Text("Motor de Audio: MPV IPC Nativo (Hi-Res Lossless & Opus direct stream)", color = Color(0xFFD1D5DB), fontSize = 13.sp)
-                Text("Sistema Operativo: Linux Mint / Linux (x86_64)", color = Color(0xFF9CA3AF), fontSize = 13.sp)
-                Text("Distribución: Paquete nativo .deb y portable .AppImage", color = Color(0xFF9CA3AF), fontSize = 13.sp)
-                Text("Líricas Sincronizadas: LRCLIB API", color = Color(0xFF9CA3AF), fontSize = 13.sp)
             }
         }
     }
@@ -1448,7 +1407,11 @@ fun StoredSongRow(stored: StoredSong, onPlay: () -> Unit) {
 }
 
 @Composable
-fun PlayerBar(player: DesktopPlayer, onOpenLyrics: () -> Unit) {
+fun PlayerBar(
+    player: DesktopPlayer,
+    onOpenLyrics: () -> Unit,
+    onOpenQueue: () -> Unit
+) {
     val state by player.state.collectAsState()
     val position by player.positionMs.collectAsState()
     val duration by player.durationMs.collectAsState()
@@ -1647,12 +1610,16 @@ fun PlayerBar(player: DesktopPlayer, onOpenLyrics: () -> Unit) {
                         Icon(Icons.Default.Mic, contentDescription = "Letras", tint = Color.Gray)
                     }
 
+                    IconButton(onClick = onOpenQueue) {
+                        Icon(Icons.AutoMirrored.Filled.QueueMusic, contentDescription = "Cola", tint = Color.Gray)
+                    }
+
                     Icon(Icons.Default.VolumeUp, contentDescription = null, tint = Color.Gray, modifier = Modifier.size(20.dp))
                     Spacer(Modifier.width(6.dp))
                     Slider(
                         value = volume / 100f,
                         onValueChange = { player.setVolume((it * 100).toInt()) },
-                        modifier = Modifier.width(100.dp),
+                        modifier = Modifier.width(90.dp),
                         colors = SliderDefaults.colors(
                             thumbColor = Color.White,
                             activeTrackColor = Color(0xFFA78BFA),
