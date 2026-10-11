@@ -58,8 +58,13 @@ class MpvProcess(
                 add("--idle=yes")
                 add("--force-window=no")
                 add("--video=no")
+                add("--audio-buffer=0.5")
+                add("--demuxer-max-bytes=20M")
+                add("--demuxer-readahead-secs=15")
+                add("--network-timeout=10")
+                add("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+                add("--stream-lavf-o=reconnect=1,reconnect_streamed=1,reconnect_delay_max=5")
                 add("--ytdl-format=bestaudio/best")
-                add("--audio-buffer=2")
                 addAll(extraArgs)
             }
         process =

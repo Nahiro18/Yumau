@@ -26,6 +26,7 @@ data class DesktopMediaItem(
     val uri: String,
     val durationMs: Long = 0,
     val thumbnailUrl: String? = null,
+    val audioFormat: String? = null,
 )
 
 enum class DesktopPlayerState { IDLE, PLAYING, PAUSED, ENDED, ERROR }
@@ -50,6 +51,9 @@ class DesktopPlayer(
 
     private val _durationMs = MutableStateFlow(0L)
     val durationMs: StateFlow<Long> = _durationMs.asStateFlow()
+
+    private val _currentFormat = MutableStateFlow<String?>(null)
+    val currentFormat: StateFlow<String?> = _currentFormat.asStateFlow()
 
     private val _volume = MutableStateFlow(100)
     val volume: StateFlow<Int> = _volume.asStateFlow()
@@ -97,6 +101,12 @@ class DesktopPlayer(
                 onTrackFinished()
             }
         }
+        mpv.observeProperty("audio-codec-name") { el ->
+            val codec = (el as? kotlinx.serialization.json.JsonPrimitive)?.content?.uppercase()
+            if (!codec.isNullOrBlank() && _currentFormat.value.isNullOrBlank()) {
+                _currentFormat.value = codec
+            }
+        }
 
         // Active poller to guarantee real-time seekbar progress even if IPC events stall
         scope.launch {
@@ -142,6 +152,7 @@ class DesktopPlayer(
         _currentIndex.value = index
         val item = items[index]
         _positionMs.value = 0L
+        _currentFormat.value = item.audioFormat
         if (item.durationMs > 0) {
             _durationMs.value = item.durationMs
         }

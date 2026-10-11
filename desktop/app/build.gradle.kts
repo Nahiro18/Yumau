@@ -24,6 +24,7 @@ dependencies {
     implementation(project(":core:innertube"))
     implementation(project(":lyrics:lrclib"))
     implementation(project(":spotifycore"))
+    implementation(project(":morideobfuscator"))
 
     implementation(compose.desktop.currentOs)
     implementation(compose.material3)

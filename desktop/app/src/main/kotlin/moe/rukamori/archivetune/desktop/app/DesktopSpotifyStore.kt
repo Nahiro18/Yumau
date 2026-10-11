@@ -244,19 +244,24 @@ object DesktopSpotifyStore {
         Spotify.playlistTracks(playlistId, limit = 100).getOrNull()?.items.orEmpty()
     }
 
+    private val matchCache = java.util.concurrent.ConcurrentHashMap<String, SongItem>()
+
     suspend fun matchSpotifyTrackToYouTube(track: SpotifyTrack): SongItem? = withContext(Dispatchers.IO) {
+        val cacheKey = track.id.ifBlank { "${track.name}_${track.artists.firstOrNull()?.name}" }
+        matchCache[cacheKey]?.let { return@withContext it }
+
         val artistName = track.artists.firstOrNull()?.name.orEmpty()
         val query = "${track.name} $artistName"
         try {
             val res = YouTube.search(query, filter = SearchFilter.FILTER_SONG).getOrNull()
             val songs = res?.items?.filterIsInstance<SongItem>().orEmpty()
             if (songs.isNotEmpty()) {
-                // Find closest match or return first
                 val exact = songs.find { s ->
                     s.title.contains(track.name, ignoreCase = true) ||
                     track.name.contains(s.title, ignoreCase = true)
-                }
-                return@withContext exact ?: songs.first()
+                } ?: songs.first()
+                matchCache[cacheKey] = exact
+                return@withContext exact
             }
         } catch (_: Exception) {}
         null

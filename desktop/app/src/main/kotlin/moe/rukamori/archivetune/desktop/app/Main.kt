@@ -78,13 +78,24 @@ fun playTrack(
             artist = artist,
             uri = stream.url,
             durationMs = finalDurationMs,
-            thumbnailUrl = thumbnailUrl
+            thumbnailUrl = thumbnailUrl,
+            audioFormat = stream.formatLabel
         )
         player.setQueue(listOf(media), startIndex = 0)
     }
 }
 
 fun main() {
+    val cipherCache = File(System.getProperty("user.home"), ".cache/YumaPlayer/mori_cipher").apply { mkdirs() }
+    runCatching {
+        moe.rukamori.archivetune.obfuscator.MoriCipherRuntime.initialize(
+            moe.rukamori.archivetune.obfuscator.MoriCipherConfig(
+                cacheDirectory = cipherCache,
+                proxyProvider = { moe.rukamori.archivetune.innertube.YouTube.streamProxy }
+            )
+        )
+    }
+
     val player = DesktopPlayer()
     try {
         player.init()
@@ -1428,6 +1439,7 @@ fun PlayerBar(
     val repeatMode by player.repeatModeFlow.collectAsState()
     val shuffleEnabled by player.shuffleEnabledFlow.collectAsState()
     val favorites by DesktopLibraryStore.favorites.collectAsState()
+    val currentFormat by player.currentFormat.collectAsState()
 
     val current = queue.getOrNull(index)
     val isFav = current != null && favorites.any { it.id == current.id }
@@ -1478,18 +1490,21 @@ fun PlayerBar(
                                 overflow = TextOverflow.Ellipsis,
                                 color = Color.White
                             )
-                            Spacer(Modifier.width(6.dp))
-                            Surface(
-                                color = Color(0xFF2D224C),
-                                shape = RoundedCornerShape(4.dp),
-                            ) {
-                                Text(
-                                    "OPUS",
-                                    fontSize = 9.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color(0xFFA78BFA),
-                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
-                                )
+                            val badge = currentFormat ?: current?.audioFormat
+                            if (!badge.isNullOrBlank()) {
+                                Spacer(Modifier.width(6.dp))
+                                Surface(
+                                    color = Color(0xFF2D224C),
+                                    shape = RoundedCornerShape(4.dp),
+                                ) {
+                                    Text(
+                                        badge,
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFFA78BFA),
+                                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                                    )
+                                }
                             }
                         }
                         Text(
