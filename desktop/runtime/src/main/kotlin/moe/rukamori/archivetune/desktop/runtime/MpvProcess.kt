@@ -31,7 +31,7 @@ import java.util.concurrent.atomic.AtomicLong
  */
 class MpvProcess(
     private val mpvBinary: String = "mpv",
-    extraArgs: List<String> = emptyList(),
+    private val extraArgs: List<String> = emptyList(),
 ) {
     private val json = Json { ignoreUnknownKeys = true }
     private val socketPath: String =

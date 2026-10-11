@@ -49,8 +49,6 @@ rootProject.name = "YumaPlayer"
 // ---- Linux Desktop port (YumaPlayer for Linux Mint) ----
 // Always available (pure-JVM modules).
 include(":desktop:shims")
-include(":desktop:database")
-include(":desktop:sqlite-jdbc-factory")
 include(":desktop:runtime")
 include(":desktop:app")
 

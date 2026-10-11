@@ -15,9 +15,6 @@ kotlin {
 dependencies {
     implementation(project(":desktop:shims"))
     api(project(":core"))
-    // Desktop-side Room database module (same sources as the Android :database,
-    // compiled for pure JVM with a sqlite-jdbc backed factory).
-    api(project(":desktop:database"))
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.kotlinx.serialization.json)
 }

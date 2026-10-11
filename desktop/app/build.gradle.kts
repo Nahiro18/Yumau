@@ -19,11 +19,7 @@ kotlin {
 
 dependencies {
     implementation(project(":desktop:runtime"))
-    implementation(project(":desktop:database"))
     implementation(project(":desktop:shims"))
-    // Runtime-only: installs the JDBC-backed androidx.sqlite/Room provider via
-    // the DesktopSqliteBridge hook in :desktop:shims.
-    runtimeOnly(project(":desktop:sqlite-jdbc-factory"))
     implementation(project(":core"))
     implementation(project(":core:innertube"))
     implementation(project(":lyrics:lrclib"))

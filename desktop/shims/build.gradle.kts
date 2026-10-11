@@ -19,5 +19,6 @@ dependencies {
     // Pure-JVM androidx.sqlite provides the SupportSQLite* contracts that the
     // framework shim and JDBC factory implement on desktop.
     api("androidx.sqlite:sqlite:2.6.2")
+    api("androidx.collection:collection:1.4.5")
     implementation(libs.kotlinx.coroutines.core)
 }
