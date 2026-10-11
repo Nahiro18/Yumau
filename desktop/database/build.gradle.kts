@@ -37,6 +37,14 @@ dependencies {
     // Room is consumed as a pure JVM library (the android.* APIs its -android
     // variant would need are provided by :desktop:shims at compile time).
     api("androidx.room:room-runtime-jvm:2.8.4")
+    // IMPORTANT: declare room-common-jvm explicitly. The room-runtime-jvm POM
+    // depends on the *multiplatform* `room-common` module, whose Gradle metadata
+    // redirects consumers to the -android variant; KSP's classpath analysis then
+    // cannot resolve androidx.room annotations (Dao/Database/...) and fails with
+    // "MissingType". Depending on the concrete -jvm artifact directly guarantees
+    // the annotation classes are present for both kotlinc and KSP.
+    api("androidx.room:room-common-jvm:2.8.4")
+    api("androidx.room:room-migration-jvm:2.8.4")
     // room-ktx is an AAR-only artifact (Android); the JVM Room runtime already exposes coroutine suspend support.
     ksp(libs.room.compiler)
 
