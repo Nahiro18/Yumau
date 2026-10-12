@@ -147,6 +147,15 @@ class DesktopPlayer(
     }
 
     var autoSkipNextOnError: Boolean = true
+    var itemResolver: (suspend (DesktopMediaItem) -> DesktopMediaItem?)? = null
+
+    fun setPreparing(item: DesktopMediaItem) {
+        _queue.value = listOf(item)
+        _currentIndex.value = 0
+        _currentFormat.value = item.audioFormat ?: "Cargando audio..."
+        _positionMs.value = 0L
+        _durationMs.value = item.durationMs
+    }
 
     fun updateAudioFilters(volumeNormalization: Boolean, skipSilence: Boolean) {
         scope.launch {
@@ -172,17 +181,55 @@ class DesktopPlayer(
         _currentIndex.value = index
         val item = items[index]
         _positionMs.value = 0L
-        _currentFormat.value = item.audioFormat
+        _currentFormat.value = item.audioFormat ?: "Cargando audio..."
         if (item.durationMs > 0) {
             _durationMs.value = item.durationMs
         }
-        val target = if (File(item.uri).isAbsolute) item.uri else item.uri
         scope.launch {
-            runCatching {
-                mpv.command(listOf("loadfile", target, "replace"))
-                mpv.command(listOf("set_property", "pause", false))
-                _state.value = DesktopPlayerState.PLAYING
-            }.onFailure {
+            val resolvedItem = if (item.uri.isBlank()) {
+                itemResolver?.invoke(item) ?: item
+            } else {
+                item
+            }
+            if (resolvedItem.uri.isNotBlank()) {
+                val currentList = _queue.value.toMutableList()
+                if (index < currentList.size) {
+                    currentList[index] = resolvedItem
+                    _queue.value = currentList
+                }
+                _currentFormat.value = resolvedItem.audioFormat
+                if (resolvedItem.durationMs > 0) {
+                    _durationMs.value = resolvedItem.durationMs
+                }
+                runCatching {
+                    mpv.command(listOf("loadfile", resolvedItem.uri, "replace"))
+                    mpv.command(listOf("set_property", "pause", false))
+                    _state.value = DesktopPlayerState.PLAYING
+                }.onFailure {
+                    _state.value = DesktopPlayerState.ERROR
+                    if (autoSkipNextOnError && items.size > 1) {
+                        delay(500)
+                        next()
+                    }
+                }
+
+                // Asynchronously prefetch next track in queue
+                val nextIdx = if (shuffleEnabled) -1 else (index + 1)
+                if (nextIdx in currentList.indices && currentList[nextIdx].uri.isBlank()) {
+                    launch {
+                        runCatching {
+                            val nextResolved = itemResolver?.invoke(currentList[nextIdx])
+                            if (nextResolved != null && nextResolved.uri.isNotBlank()) {
+                                val updated = _queue.value.toMutableList()
+                                if (nextIdx < updated.size && updated[nextIdx].id == nextResolved.id) {
+                                    updated[nextIdx] = nextResolved
+                                    _queue.value = updated
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
                 _state.value = DesktopPlayerState.ERROR
                 if (autoSkipNextOnError && items.size > 1) {
                     delay(500)

@@ -59,8 +59,21 @@ fun playTrack(
     durationSeconds: Int?,
     thumbnailUrl: String?,
 ) {
+    val initialDurationMs = (durationSeconds ?: 0) * 1000L
+    // Immediate visual feedback (0ms): show track with "Cargando audio..." state
+    player.setPreparing(
+        DesktopMediaItem(
+            id = songId,
+            title = title,
+            artist = artist,
+            uri = "",
+            durationMs = initialDurationMs,
+            thumbnailUrl = thumbnailUrl,
+            audioFormat = "Cargando audio..."
+        )
+    )
+
     scope.launch {
-        val initialDurationMs = (durationSeconds ?: 0) * 1000L
         DesktopLibraryStore.recordHistory(
             StoredSong(
                 id = songId,
@@ -78,7 +91,8 @@ fun playTrack(
             durationMs = initialDurationMs,
             playbackSource = s.playbackSource,
             flacQuality = s.flacQuality,
-            preferredQuality = s.audioQuality
+            preferredQuality = s.audioQuality,
+            preferredClientName = s.streamingClient
         )
         val finalDurationMs = if (stream.durationMs > 0) stream.durationMs else initialDurationMs
         val media = DesktopMediaItem(
@@ -106,6 +120,25 @@ fun main() {
     }
 
     val player = DesktopPlayer()
+    player.itemResolver = { mediaItem ->
+        val s = DesktopSettingsStore.settings.value
+        val stream = DesktopStreamResolver.resolveStreamUrl(
+            videoId = mediaItem.id,
+            title = mediaItem.title,
+            artist = mediaItem.artist,
+            durationMs = mediaItem.durationMs,
+            playbackSource = s.playbackSource,
+            flacQuality = s.flacQuality,
+            preferredQuality = s.audioQuality,
+            preferredClientName = s.streamingClient
+        )
+        val dur = if (stream.durationMs > 0) stream.durationMs else mediaItem.durationMs
+        mediaItem.copy(
+            uri = stream.url,
+            durationMs = dur,
+            audioFormat = stream.formatLabel
+        )
+    }
     try {
         player.init()
         val s = DesktopSettingsStore.settings.value

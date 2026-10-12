@@ -1,5 +1,6 @@
 package moe.rukamori.archivetune.desktop.app
 
+import kotlinx.coroutines.withTimeoutOrNull
 import moe.rukamori.archivetune.flaccore.FlacConfig
 import moe.rukamori.archivetune.flaccore.FlacKvStore
 import moe.rukamori.archivetune.flaccore.model.TrackQuery
@@ -45,8 +46,8 @@ object DesktopFlacResolver {
     )
 
     private val httpClient = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(15, TimeUnit.SECONDS)
+        .connectTimeout(5, TimeUnit.SECONDS)
+        .readTimeout(5, TimeUnit.SECONDS)
         .build()
 
     private val apiClient = QbdlxApiClient(
@@ -71,6 +72,14 @@ object DesktopFlacResolver {
         durationMs: Long = 0L,
         quality: String = "HI_RES"
     ): ResolvedAudioStream? {
+        val s = DesktopSettingsStore.settings.value
+        val hasSecret = s.qobuzAppSecret.trim().isNotBlank()
+        val hasToken = s.qobuzUserAuthToken.trim().isNotBlank()
+        if (!hasSecret && !hasToken) {
+            // No credentials configured: do not waste network time or cause timeout delay
+            return null
+        }
+
         val formatId = when (quality) {
             "CD" -> 6
             "HI_RES" -> 7
@@ -83,7 +92,9 @@ object DesktopFlacResolver {
             durationMs = if (durationMs > 0) durationMs else null
         )
 
-        val stream = runCatching { resolver.resolve(query, formatId) }.getOrNull() ?: return null
+        val stream = withTimeoutOrNull(2500L) {
+            runCatching { resolver.resolve(query, formatId) }.getOrNull()
+        } ?: return null
 
         val bitDepth = stream.bitsPerSample ?: 24
         val sampleRateKhz = (stream.sampleRateHz ?: 96000) / 1000f

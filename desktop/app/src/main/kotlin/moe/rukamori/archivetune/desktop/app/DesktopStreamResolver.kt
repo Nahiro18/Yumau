@@ -1,7 +1,9 @@
 package moe.rukamori.archivetune.desktop.app
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import moe.rukamori.archivetune.innertube.YouTube
 import moe.rukamori.archivetune.innertube.models.YouTubeClient
 import moe.rukamori.archivetune.innertube.models.response.PlayerResponse
@@ -20,16 +22,55 @@ data class ResolvedAudioStream(
 )
 
 object DesktopStreamResolver {
-    private val clientCandidates = listOf(
-        YouTubeClient.ANDROID_TESTSUITE,
-        YouTubeClient.IOS,
+    private val defaultClientOrder = listOf(
         YouTubeClient.ANDROID_VR_NO_AUTH,
-        YouTubeClient.WEB_REMIX,
         YouTubeClient.ANDROID_VR_1_61_48,
+        YouTubeClient.IOS,
+        YouTubeClient.ANDROID_MUSIC,
+        YouTubeClient.WEB_REMIX,
     )
 
     private val streamCache = ConcurrentHashMap<String, Pair<ResolvedAudioStream, Long>>()
     private const val CACHE_TTL_MS = 2 * 60 * 60 * 1000L
+
+    fun getClientCandidates(preferredClientName: String?): List<YouTubeClient> {
+        val preferred = when (preferredClientName) {
+            "ANDROID_VR" -> YouTubeClient.ANDROID_VR_NO_AUTH
+            "IOS" -> YouTubeClient.IOS
+            "ANDROID_MUSIC" -> YouTubeClient.ANDROID_MUSIC
+            "WEB_REMIX" -> YouTubeClient.WEB_REMIX
+            else -> YouTubeClient.ANDROID_VR_NO_AUTH
+        }
+        return listOf(preferred) + defaultClientOrder.filter { it != preferred }
+    }
+
+    fun prefetch(
+        videoId: String,
+        title: String = "",
+        artist: String = "",
+        durationMs: Long = 0L,
+        playbackSource: String = "YT_MUSIC",
+        flacQuality: String = "HI_RES",
+        preferredQuality: String = "HIGH",
+        preferredClientName: String = "ANDROID_VR"
+    ) {
+        val cacheKey = if (playbackSource == "FLAC") "${videoId}_FLAC_${flacQuality}" else "${videoId}_$preferredQuality"
+        if (streamCache.containsKey(cacheKey)) return
+        kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
+            runCatching {
+                resolveStreamUrl(
+                    videoId = videoId,
+                    title = title,
+                    artist = artist,
+                    durationMs = durationMs,
+                    playbackSource = playbackSource,
+                    flacQuality = flacQuality,
+                    preferredQuality = preferredQuality,
+                    preferredClientName = preferredClientName
+                )
+            }
+        }
+    }
 
     suspend fun resolveStreamUrl(
         videoId: String,
@@ -38,7 +79,8 @@ object DesktopStreamResolver {
         durationMs: Long = 0L,
         playbackSource: String = "YT_MUSIC",
         flacQuality: String = "HI_RES",
-        preferredQuality: String = "HIGH"
+        preferredQuality: String = "HIGH",
+        preferredClientName: String = "ANDROID_VR"
     ): ResolvedAudioStream = withContext(Dispatchers.IO) {
         val cacheKey = if (playbackSource == "FLAC") "${videoId}_FLAC_${flacQuality}" else "${videoId}_$preferredQuality"
         streamCache[cacheKey]?.let { (cachedStream, timestamp) ->
@@ -62,9 +104,13 @@ object DesktopStreamResolver {
             }
         }
 
-        for (client in clientCandidates) {
+        val clients = getClientCandidates(preferredClientName)
+        for (client in clients) {
             try {
-                val response = YouTube.player(videoId = videoId, client = client).getOrNull() ?: continue
+                val response = withTimeoutOrNull(3000L) {
+                    YouTube.player(videoId = videoId, client = client).getOrNull()
+                } ?: continue
+
                 if (response.playabilityStatus.status != "OK") continue
 
                 val formats = response.streamingData?.adaptiveFormats
@@ -73,16 +119,23 @@ object DesktopStreamResolver {
 
                 if (formats.isEmpty()) continue
 
-                val durationMs = response.videoDetails
+                val songDurationMs = response.videoDetails
                     ?.lengthSeconds
                     ?.toLongOrNull()
                     ?.takeIf { it > 0 }
-                    ?.times(1000L) ?: 0L
+                    ?.times(1000L) ?: durationMs
 
                 val candidate = selectFormat(formats, preferredQuality) ?: formats.firstOrNull()
                 if (candidate != null) {
-                    val streamUrl = NewPipeUtils.getStreamUrl(candidate, videoId, client).getOrNull()
-                        ?: candidate.url
+                    // FAST PATH: Use direct URL without heavy JS deobfuscation
+                    val streamUrl = if (!candidate.url.isNullOrBlank()) {
+                        candidate.url
+                    } else {
+                        // CIPHER PATH: Only if format requires signature decipher
+                        withTimeoutOrNull(2500L) {
+                            NewPipeUtils.getStreamUrl(candidate, videoId, client).getOrNull()
+                        } ?: candidate.url
+                    }
 
                     if (!streamUrl.isNullOrBlank()) {
                         val isOpus = candidate.mimeType.contains("audio/webm", ignoreCase = true) ||
@@ -97,7 +150,7 @@ object DesktopStreamResolver {
                             mimeType = candidate.mimeType,
                             bitrate = candidate.bitrate,
                             isOpus = isOpus,
-                            durationMs = durationMs,
+                            durationMs = songDurationMs,
                             clientName = client.clientName,
                             formatLabel = formatLabel
                         )
@@ -113,7 +166,7 @@ object DesktopStreamResolver {
         // Fallback to direct youtube watch URL for mpv built-in yt-dlp handler
         ResolvedAudioStream(
             url = "https://www.youtube.com/watch?v=$videoId",
-            durationMs = 0L,
+            durationMs = durationMs,
             formatLabel = "AUTO"
         )
     }
@@ -143,7 +196,10 @@ object DesktopStreamResolver {
         formats: List<PlayerResponse.StreamingData.Format>,
         quality: String
     ): PlayerResponse.StreamingData.Format? {
-        val opusFormats = formats.filter {
+        val directFormats = formats.filter { !it.url.isNullOrBlank() }
+        val pool = if (directFormats.isNotEmpty()) directFormats else formats
+
+        val opusFormats = pool.filter {
             it.mimeType.contains("audio/webm", ignoreCase = true) ||
             it.mimeType.contains("opus", ignoreCase = true) ||
             it.itag == 251 || it.itag == 250 || it.itag == 249
@@ -153,18 +209,18 @@ object DesktopStreamResolver {
             "HIGH" -> {
                 opusFormats.find { it.itag == 251 }
                     ?: opusFormats.maxByOrNull { it.bitrate }
-                    ?: formats.maxByOrNull { it.bitrate }
+                    ?: pool.maxByOrNull { it.bitrate }
             }
             "MEDIUM" -> {
-                formats.find { it.itag == 140 }
+                pool.find { it.itag == 140 }
                     ?: opusFormats.find { it.itag == 250 }
-                    ?: formats.minByOrNull { kotlin.math.abs(it.bitrate - 128_000) }
+                    ?: pool.minByOrNull { kotlin.math.abs(it.bitrate - 128_000) }
             }
             "LOW" -> {
                 opusFormats.find { it.itag == 249 }
-                    ?: formats.minByOrNull { it.bitrate }
+                    ?: pool.minByOrNull { it.bitrate }
             }
-            else -> opusFormats.find { it.itag == 251 } ?: formats.maxByOrNull { it.bitrate }
+            else -> opusFormats.find { it.itag == 251 } ?: pool.maxByOrNull { it.bitrate }
         }
     }
 }
