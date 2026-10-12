@@ -163,6 +163,12 @@ class DesktopPlayer(
         if (_currentIndex.value < 0) playIndex(_queue.value.lastIndex)
     }
 
+    fun addToQueue(items: List<DesktopMediaItem>) {
+        if (items.isEmpty()) return
+        _queue.value = _queue.value + items
+        if (_currentIndex.value < 0) playIndex(_queue.value.lastIndex - items.size + 1)
+    }
+
     var autoSkipNextOnError: Boolean = true
     var itemResolver: (suspend (DesktopMediaItem) -> DesktopMediaItem?)? = null
 

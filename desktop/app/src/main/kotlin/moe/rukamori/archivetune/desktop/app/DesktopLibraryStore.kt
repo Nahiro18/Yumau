@@ -33,6 +33,7 @@ object DesktopLibraryStore {
     private val favoritesFile = File(configDir, "favorites.json")
     private val historyFile = File(configDir, "history.json")
     private val playlistsFile = File(configDir, "playlists.json")
+    private val searchHistoryFile = File(configDir, "search_history.json")
 
     private val json = Json {
         prettyPrint = true
@@ -47,6 +48,9 @@ object DesktopLibraryStore {
 
     private val _playlists = MutableStateFlow<List<StoredPlaylist>>(emptyList())
     val playlists: StateFlow<List<StoredPlaylist>> = _playlists.asStateFlow()
+
+    private val _recentSearches = MutableStateFlow<List<String>>(emptyList())
+    val recentSearches: StateFlow<List<String>> = _recentSearches.asStateFlow()
 
     init {
         loadData()
@@ -71,6 +75,13 @@ object DesktopLibraryStore {
             if (playlistsFile.exists()) {
                 val list = json.decodeFromString<List<StoredPlaylist>>(playlistsFile.readText())
                 _playlists.value = list
+            }
+        } catch (_: Exception) {}
+
+        try {
+            if (searchHistoryFile.exists()) {
+                val list = json.decodeFromString<List<String>>(searchHistoryFile.readText())
+                _recentSearches.value = list
             }
         } catch (_: Exception) {}
     }
@@ -135,6 +146,32 @@ object DesktopLibraryStore {
         _playlists.value = updated
         try {
             playlistsFile.writeText(json.encodeToString(updated))
+        } catch (_: Exception) {}
+    }
+
+    suspend fun addSearchQuery(query: String) = withContext(Dispatchers.IO) {
+        val trimmed = query.trim()
+        if (trimmed.isBlank()) return@withContext
+        val current = _recentSearches.value
+        val updated = (listOf(trimmed) + current.filterNot { it.equals(trimmed, ignoreCase = true) }).take(30)
+        _recentSearches.value = updated
+        try {
+            searchHistoryFile.writeText(json.encodeToString(updated))
+        } catch (_: Exception) {}
+    }
+
+    suspend fun removeSearchQuery(query: String) = withContext(Dispatchers.IO) {
+        val updated = _recentSearches.value.filterNot { it.equals(query, ignoreCase = true) }
+        _recentSearches.value = updated
+        try {
+            searchHistoryFile.writeText(json.encodeToString(updated))
+        } catch (_: Exception) {}
+    }
+
+    suspend fun clearSearchQueries() = withContext(Dispatchers.IO) {
+        _recentSearches.value = emptyList()
+        try {
+            searchHistoryFile.writeText(json.encodeToString(emptyList<String>()))
         } catch (_: Exception) {}
     }
 }

@@ -23,6 +23,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -41,6 +49,7 @@ import moe.rukamori.archivetune.desktop.runtime.DesktopPlayerState
 import moe.rukamori.archivetune.innertube.SearchFilter
 import moe.rukamori.archivetune.innertube.YouTube
 import moe.rukamori.archivetune.innertube.models.SongItem
+import moe.rukamori.archivetune.innertube.models.WatchEndpoint
 import moe.rukamori.archivetune.lrclib.LrcLib
 import moe.rukamori.archivetune.spotify.models.SpotifyPlaylist
 import moe.rukamori.archivetune.spotify.models.SpotifyPlaylistTrack
@@ -108,7 +117,76 @@ fun playTrack(
             audioFormat = stream.formatLabel
         )
         player.setQueue(listOf(media), startIndex = 0)
+
+        // Auto-cola inteligente (Radio algorithm) - Llena la cola con ~25 canciones recomendadas
+        scope.launch(Dispatchers.IO) {
+            runCatching {
+                val nextResult = YouTube.next(WatchEndpoint(videoId = songId)).getOrNull()
+                val recommended = nextResult?.items
+                    ?.filter { it.id != songId }
+                    ?.distinctBy { it.id }
+                    ?.take(25)
+                    ?.map { s ->
+                        DesktopMediaItem(
+                            id = s.id,
+                            title = s.title,
+                            artist = s.artists.joinToString(", ") { it.name },
+                            uri = "",
+                            durationMs = (s.duration ?: 0) * 1000L,
+                            thumbnailUrl = s.thumbnail,
+                            audioFormat = null
+                        )
+                    }.orEmpty()
+                if (recommended.isNotEmpty()) {
+                    val currentTrack = player.queue.value.getOrNull(player.currentIndex.value)
+                    if (currentTrack?.id == songId) {
+                        player.addToQueue(recommended)
+                    }
+                }
+            }
+        }
     }
+}
+
+fun playSpotifyTrack(
+    scope: CoroutineScope,
+    player: DesktopPlayer,
+    track: SpotifyTrack,
+) {
+    player.setPreparing(
+        DesktopMediaItem(
+            id = track.id,
+            title = track.name,
+            artist = track.artists.joinToString(", ") { it.name },
+            uri = "",
+            durationMs = track.durationMs.toLong(),
+            thumbnailUrl = track.album?.images?.firstOrNull()?.url,
+            audioFormat = "Buscando en YouTube..."
+        )
+    )
+    scope.launch {
+        val ytSong = DesktopSpotifyStore.matchSpotifyTrackToYouTube(track)
+        if (ytSong != null) {
+            playTrack(
+                scope = scope,
+                player = player,
+                songId = ytSong.id,
+                title = track.name,
+                artist = track.artists.joinToString(", ") { it.name },
+                durationSeconds = ytSong.duration ?: (track.durationMs / 1000),
+                thumbnailUrl = track.album?.images?.firstOrNull()?.url ?: ytSong.thumbnail
+            )
+        }
+    }
+}
+
+fun playQueue(
+    player: DesktopPlayer,
+    items: List<DesktopMediaItem>,
+    startIndex: Int = 0,
+) {
+    if (items.isEmpty()) return
+    player.setQueue(items, startIndex = startIndex)
 }
 
 fun main() {
@@ -130,8 +208,15 @@ fun main() {
     val player = DesktopPlayer()
     player.itemResolver = { mediaItem ->
         val s = DesktopSettingsStore.settings.value
+        var actualVideoId = mediaItem.id
+        if (actualVideoId.startsWith("spt:") || actualVideoId.length == 22) {
+            val matched = DesktopSpotifyStore.matchTitleArtistToYouTube(mediaItem.title, mediaItem.artist)
+            if (matched != null) {
+                actualVideoId = matched.id
+            }
+        }
         val stream = DesktopStreamResolver.resolveStreamUrl(
-            videoId = mediaItem.id,
+            videoId = actualVideoId,
             title = mediaItem.title,
             artist = mediaItem.artist,
             durationMs = mediaItem.durationMs,
@@ -142,6 +227,7 @@ fun main() {
         )
         val dur = if (stream.durationMs > 0) stream.durationMs else mediaItem.durationMs
         mediaItem.copy(
+            id = actualVideoId,
             uri = stream.url,
             durationMs = dur,
             audioFormat = stream.formatLabel
@@ -186,6 +272,7 @@ private val SpotifyBrandGreen = Color(0xFF1DB954)
 @Composable
 fun YumaApp(player: DesktopPlayer) {
     val settings by DesktopSettingsStore.settings.collectAsState()
+    val scope = rememberCoroutineScope()
     // 0: Inicio, 1: Buscar, 2: Biblioteca, 3: Ajustes, 4: Letras, 5: Cola
     var selectedSection by remember { mutableStateOf(settings.defaultTab) }
     var previousSection by remember { mutableStateOf(settings.defaultTab) }
@@ -258,10 +345,34 @@ fun YumaApp(player: DesktopPlayer) {
                             .padding(horizontal = 20.dp, vertical = 12.dp)
                     ) {
                         when (selectedSection) {
-                            0 -> HomeScreen(player = player)
-                            1 -> SearchScreen(player = player)
-                            2 -> LibraryScreen(
+                            0 -> DesktopHomeScreen(
+                                onPlayTrack = { songId, title, artist, duration, thumb ->
+                                    playTrack(scope, player, songId, title, artist, duration, thumb)
+                                },
+                                onPlaySpotifyTrack = { track ->
+                                    playSpotifyTrack(scope, player, track)
+                                },
+                                onNavigateToSettings = { selectedSection = 3 }
+                            )
+                            1 -> SearchScreen(
                                 player = player,
+                                onPlayTrack = { songId, title, artist, duration, thumb ->
+                                    playTrack(scope, player, songId, title, artist, duration, thumb)
+                                },
+                                onPlaySpotifyTrack = { track ->
+                                    playSpotifyTrack(scope, player, track)
+                                }
+                            )
+                            2 -> DesktopLibraryScreen(
+                                onPlayTrack = { songId, title, artist, duration, thumb ->
+                                    playTrack(scope, player, songId, title, artist, duration, thumb)
+                                },
+                                onPlaySpotifyTrack = { track ->
+                                    playSpotifyTrack(scope, player, track)
+                                },
+                                onPlayQueue = { items, startIndex ->
+                                    playQueue(player, items, startIndex)
+                                },
                                 onNavigateToSettings = { selectedSection = 3 }
                             )
                             3 -> SettingsScreen(player = player)
@@ -395,86 +506,89 @@ fun Sidebar(selectedSection: Int, onSelectSection: (Int) -> Unit) {
     }
 }
 
-@Composable
-fun HomeScreen(player: DesktopPlayer) {
-    var exploreSongs by remember { mutableStateOf<List<SongItem>>(emptyList()) }
-    var isLoading by remember { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
-
-    LaunchedEffect(Unit) {
-        isLoading = true
-        withContext(Dispatchers.IO) {
-            try {
-                val chartResult = YouTube.getChartsPage().getOrNull()
-                val songs = chartResult?.sections?.flatMap { it.items }?.filterIsInstance<SongItem>() ?: emptyList()
-                if (songs.isNotEmpty()) {
-                    exploreSongs = songs
-                } else {
-                    val fallback = YouTube.search("Top Hits 2026", filter = SearchFilter.FILTER_SONG).getOrNull()
-                    exploreSongs = fallback?.items?.filterIsInstance<SongItem>() ?: emptyList()
-                }
-            } catch (_: Exception) {
-                val fallback = YouTube.search("Top Music", filter = SearchFilter.FILTER_SONG).getOrNull()
-                exploreSongs = fallback?.items?.filterIsInstance<SongItem>() ?: emptyList()
-            } finally {
-                isLoading = false
-            }
-        }
-    }
-
-    Column(Modifier.fillMaxSize()) {
-        Text(
-            "Explorar Música",
-            fontSize = 24.sp,
-            fontWeight = FontWeight.Bold,
-            color = Color.White
-        )
-        Text(
-            "Tendencias y recomendaciones en formato Opus de alta fidelidad",
-            fontSize = 13.sp,
-            color = Color(0xFF9CA3AF),
-            modifier = Modifier.padding(bottom = 16.dp)
-        )
-
-        if (isLoading) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
-            }
-        } else {
-            LazyColumn(Modifier.fillMaxSize()) {
-                items(exploreSongs) { song ->
-                    SongRowItem(
-                        song = song,
-                        onPlay = {
-                            playTrack(
-                                scope = scope,
-                                player = player,
-                                songId = song.id,
-                                title = song.title,
-                                artist = song.artists.joinToString(", ") { it.name },
-                                durationSeconds = song.duration,
-                                thumbnailUrl = song.thumbnail
-                            )
-                        }
-                    )
-                }
-            }
-        }
-    }
+sealed class LibraryMatchItem(
+    val title: String,
+    val artist: String,
+    val durationMs: Long,
+    val thumbnail: String?,
+    val sourceLabel: String
+) {
+    class Spotify(val track: SpotifyTrack) : LibraryMatchItem(
+        title = track.name,
+        artist = track.artists.joinToString(", ") { it.name },
+        durationMs = track.durationMs.toLong(),
+        thumbnail = track.album?.images?.firstOrNull()?.url,
+        sourceLabel = "Spotify Me Gusta"
+    )
+    class Local(val song: StoredSong, val isFav: Boolean) : LibraryMatchItem(
+        title = song.title,
+        artist = song.artist,
+        durationMs = song.durationMs,
+        thumbnail = song.thumbnailUrl,
+        sourceLabel = if (isFav) "Favorito" else "Historial"
+    )
 }
 
 @Composable
-fun SearchScreen(player: DesktopPlayer) {
+fun SearchScreen(
+    player: DesktopPlayer,
+    onPlayTrack: (songId: String, title: String, artist: String, durationSeconds: Int?, thumbnailUrl: String?) -> Unit,
+    onPlaySpotifyTrack: (track: SpotifyTrack) -> Unit,
+) {
     var query by remember { mutableStateOf("") }
     var filterType by remember { mutableStateOf(0) }
     var results by remember { mutableStateOf<List<SongItem>>(emptyList()) }
     var isSearching by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
-    fun doSearch() {
-        if (query.isBlank()) return
+    val recentSearches by DesktopLibraryStore.recentSearches.collectAsState()
+    val spotifyLiked by DesktopSpotifyStore.likedSongs.collectAsState()
+    val favorites by DesktopLibraryStore.favorites.collectAsState()
+    val history by DesktopLibraryStore.history.collectAsState()
+
+    // 0ms instant filter prioritizing user's known songs
+    val instantMatches = remember(query, spotifyLiked, favorites, history) {
+        val q = query.trim()
+        if (q.length < 2) emptyList()
+        else {
+            val list = mutableListOf<LibraryMatchItem>()
+            for (item in spotifyLiked) {
+                val t = item.track
+                if (t.name.contains(q, ignoreCase = true) || t.artists.any { it.name.contains(q, ignoreCase = true) }) {
+                    list.add(LibraryMatchItem.Spotify(t))
+                }
+            }
+            for (fav in favorites) {
+                if (fav.title.contains(q, ignoreCase = true) || fav.artist.contains(q, ignoreCase = true)) {
+                    if (list.none { it.title.equals(fav.title, ignoreCase = true) }) {
+                        list.add(LibraryMatchItem.Local(fav, isFav = true))
+                    }
+                }
+            }
+            for (h in history) {
+                if (h.title.contains(q, ignoreCase = true) || h.artist.contains(q, ignoreCase = true)) {
+                    if (list.none { it.title.equals(h.title, ignoreCase = true) }) {
+                        list.add(LibraryMatchItem.Local(h, isFav = false))
+                    }
+                }
+            }
+            list.sortedByDescending {
+                if (it.title.startsWith(q, ignoreCase = true)) 2
+                else if (it.artist.startsWith(q, ignoreCase = true)) 1
+                else 0
+            }.take(5)
+        }
+    }
+
+    var debounceJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+
+    fun doSearch(targetQuery: String = query) {
+        val q = targetQuery.trim()
+        if (q.isBlank()) return
+        debounceJob?.cancel()
         isSearching = true
         scope.launch(Dispatchers.IO) {
+            DesktopLibraryStore.addSearchQuery(q)
             try {
                 val filter = when (filterType) {
                     0 -> SearchFilter.FILTER_SONG
@@ -483,13 +597,44 @@ fun SearchScreen(player: DesktopPlayer) {
                     3 -> SearchFilter.FILTER_FEATURED_PLAYLIST
                     else -> SearchFilter.FILTER_SONG
                 }
-                val res = YouTube.search(query, filter = filter).getOrNull()
+                val res = YouTube.search(q, filter = filter).getOrNull()
                 results = res?.items?.filterIsInstance<SongItem>() ?: emptyList()
             } catch (_: Exception) {
                 results = emptyList()
             } finally {
                 isSearching = false
             }
+        }
+    }
+
+    // Debounced search while typing (350ms)
+    LaunchedEffect(query) {
+        val q = query.trim()
+        if (q.length >= 3) {
+            debounceJob?.cancel()
+            debounceJob = launch {
+                kotlinx.coroutines.delay(350)
+                isSearching = true
+                withContext(Dispatchers.IO) {
+                    try {
+                        val filter = when (filterType) {
+                            0 -> SearchFilter.FILTER_SONG
+                            1 -> SearchFilter.FILTER_ALBUM
+                            2 -> SearchFilter.FILTER_ARTIST
+                            3 -> SearchFilter.FILTER_FEATURED_PLAYLIST
+                            else -> SearchFilter.FILTER_SONG
+                        }
+                        val res = YouTube.search(q, filter = filter).getOrNull()
+                        results = res?.items?.filterIsInstance<SongItem>() ?: emptyList()
+                    } catch (_: Exception) {
+                    } finally {
+                        isSearching = false
+                    }
+                }
+            }
+        } else if (q.isEmpty()) {
+            results = emptyList()
+            isSearching = false
         }
     }
 
@@ -501,8 +646,34 @@ fun SearchScreen(player: DesktopPlayer) {
             OutlinedTextField(
                 value = query,
                 onValueChange = { query = it },
-                placeholder = { Text("Buscar canciones, artistas, géneros...") },
-                modifier = Modifier.weight(1f),
+                placeholder = { Text("Buscar canciones, artistas, géneros... (Presiona Enter)") },
+                modifier = Modifier
+                    .weight(1f)
+                    .onKeyEvent { keyEvent ->
+                        if (keyEvent.key == Key.Enter && keyEvent.type == KeyEventType.KeyUp) {
+                            if (query.isNotBlank()) {
+                                doSearch(query)
+                            }
+                            true
+                        } else false
+                    },
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                keyboardActions = KeyboardActions(onSearch = {
+                    if (query.isNotBlank()) doSearch(query)
+                }),
+                leadingIcon = {
+                    Icon(Icons.Default.Search, contentDescription = null, tint = Color.Gray)
+                },
+                trailingIcon = {
+                    if (query.isNotEmpty()) {
+                        IconButton(onClick = {
+                            query = ""
+                            results = emptyList()
+                        }) {
+                            Icon(Icons.Default.Close, contentDescription = "Limpiar", tint = Color.Gray)
+                        }
+                    }
+                },
                 singleLine = true,
                 shape = RoundedCornerShape(12.dp),
                 colors = OutlinedTextFieldDefaults.colors(
@@ -512,24 +683,22 @@ fun SearchScreen(player: DesktopPlayer) {
             )
             Spacer(Modifier.width(12.dp))
             Button(
-                onClick = { doSearch() },
+                onClick = { doSearch(query) },
                 shape = RoundedCornerShape(12.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
             ) {
-                Icon(Icons.Default.Search, contentDescription = null)
-                Spacer(Modifier.width(6.dp))
                 Text("Buscar")
             }
         }
 
-        Row(Modifier.padding(vertical = 12.dp)) {
+        Row(Modifier.padding(vertical = 10.dp)) {
             val filters = listOf("Canciones", "Álbumes", "Artistas", "Playlists")
             filters.forEachIndexed { idx, label ->
                 FilterChip(
                     selected = filterType == idx,
                     onClick = {
                         filterType = idx
-                        if (query.isNotBlank()) doSearch()
+                        if (query.isNotBlank()) doSearch(query)
                     },
                     label = { Text(label) },
                     modifier = Modifier.padding(end = 8.dp)
@@ -537,361 +706,171 @@ fun SearchScreen(player: DesktopPlayer) {
             }
         }
 
-        if (isSearching) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator()
-            }
-        } else if (results.isEmpty()) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text(
-                    if (query.isEmpty()) "Ingresa un término para buscar en YouTube Music" else "No se encontraron resultados",
-                    color = Color.Gray
-                )
+        if (query.isBlank()) {
+            if (recentSearches.isNotEmpty()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = 10.dp, bottom = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Búsquedas recientes", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                    TextButton(onClick = { scope.launch { DesktopLibraryStore.clearSearchQueries() } }) {
+                        Text("Borrar historial", color = Color.Gray, fontSize = 12.sp)
+                    }
+                }
+
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    items(recentSearches) { term ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable {
+                                    query = term
+                                    doSearch(term)
+                                }
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(Icons.Default.History, contentDescription = null, tint = Color.Gray, modifier = Modifier.size(20.dp))
+                            Spacer(Modifier.width(12.dp))
+                            Text(term, color = Color.White, fontSize = 14.sp, modifier = Modifier.weight(1f))
+                            IconButton(
+                                onClick = { scope.launch { DesktopLibraryStore.removeSearchQuery(term) } },
+                                modifier = Modifier.size(28.dp)
+                            ) {
+                                Icon(Icons.Default.Close, contentDescription = "Eliminar", tint = Color.Gray, modifier = Modifier.size(16.dp))
+                            }
+                        }
+                    }
+                }
+            } else {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(Icons.Default.Search, contentDescription = null, tint = Color.DarkGray, modifier = Modifier.size(64.dp))
+                        Spacer(Modifier.height(12.dp))
+                        Text("Escribe el nombre de una canción o artista y presiona Enter", color = Color.Gray)
+                    }
+                }
             }
         } else {
-            LazyColumn(Modifier.fillMaxSize()) {
-                items(results) { song ->
-                    SongRowItem(
-                        song = song,
-                        onPlay = {
-                            playTrack(
-                                scope = scope,
-                                player = player,
-                                songId = song.id,
-                                title = song.title,
-                                artist = song.artists.joinToString(", ") { it.name },
-                                durationSeconds = song.duration,
-                                thumbnailUrl = song.thumbnail
-                            )
-                        }
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun LibraryScreen(player: DesktopPlayer, onNavigateToSettings: () -> Unit) {
-    var tabIndex by remember { mutableStateOf(0) }
-    val favorites by DesktopLibraryStore.favorites.collectAsState()
-    val history by DesktopLibraryStore.history.collectAsState()
-    val playlists by DesktopLibraryStore.playlists.collectAsState()
-    val spotifySession by DesktopSpotifyStore.session.collectAsState()
-    val spotifyLiked by DesktopSpotifyStore.likedSongs.collectAsState()
-    val spotifyPlaylists by DesktopSpotifyStore.playlists.collectAsState()
-    val scope = rememberCoroutineScope()
-
-    var selectedSpotifyPlaylistTracks by remember { mutableStateOf<List<SpotifyPlaylistTrack>?>(null) }
-    var selectedSpotifyPlaylistName by remember { mutableStateOf("") }
-    var isLoadingSpotifyTracks by remember { mutableStateOf(false) }
-
-    LaunchedEffect(spotifySession.isLoggedIn) {
-        if (spotifySession.isLoggedIn) {
-            DesktopSpotifyStore.refreshLibrary()
-        }
-    }
-
-    Column(Modifier.fillMaxSize()) {
-        TabRow(
-            selectedTabIndex = tabIndex,
-            containerColor = Color.Transparent,
-            contentColor = MaterialTheme.colorScheme.primary
-        ) {
-            Tab(selected = tabIndex == 0, onClick = { tabIndex = 0 }, text = { Text("Favoritos (${favorites.size})") })
-            Tab(selected = tabIndex == 1, onClick = { tabIndex = 1 }, text = { Text("Historial (${history.size})") })
-            Tab(selected = tabIndex == 2, onClick = { tabIndex = 2 }, text = { Text("Playlists (${playlists.size})") })
-            Tab(
-                selected = tabIndex == 3,
-                onClick = { tabIndex = 3 },
-                text = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("Spotify")
-                        if (spotifySession.isLoggedIn) {
-                            Spacer(Modifier.width(6.dp))
-                            Box(modifier = Modifier.size(7.dp).clip(CircleShape).background(SpotifyBrandGreen))
-                        }
-                    }
-                }
-            )
-        }
-
-        Spacer(Modifier.height(16.dp))
-
-        when (tabIndex) {
-            0 -> {
-                if (favorites.isEmpty()) {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Text("Aún no tienes canciones favoritas guardadas.", color = Color.Gray)
-                    }
-                } else {
-                    LazyColumn(Modifier.fillMaxSize()) {
-                        items(favorites) { stored ->
-                            StoredSongRow(
-                                stored = stored,
-                                onPlay = {
-                                    playTrack(
-                                        scope = scope,
-                                        player = player,
-                                        songId = stored.id,
-                                        title = stored.title,
-                                        artist = stored.artist,
-                                        durationSeconds = (stored.durationMs / 1000).toInt(),
-                                        thumbnailUrl = stored.thumbnailUrl
-                                    )
-                                }
-                            )
-                        }
-                    }
-                }
-            }
-            1 -> {
-                if (history.isEmpty()) {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Text("No hay historial de reproducción aún.", color = Color.Gray)
-                    }
-                } else {
-                    LazyColumn(Modifier.fillMaxSize()) {
-                        items(history) { stored ->
-                            StoredSongRow(
-                                stored = stored,
-                                onPlay = {
-                                    playTrack(
-                                        scope = scope,
-                                        player = player,
-                                        songId = stored.id,
-                                        title = stored.title,
-                                        artist = stored.artist,
-                                        durationSeconds = (stored.durationMs / 1000).toInt(),
-                                        thumbnailUrl = stored.thumbnailUrl
-                                    )
-                                }
-                            )
-                        }
-                    }
-                }
-            }
-            2 -> {
-                var newPlName by remember { mutableStateOf("") }
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                    OutlinedTextField(
-                        value = newPlName,
-                        onValueChange = { newPlName = it },
-                        placeholder = { Text("Nombre de nueva playlist...") },
-                        modifier = Modifier.weight(1f),
-                        singleLine = true
-                    )
-                    Spacer(Modifier.width(12.dp))
-                    Button(onClick = {
-                        if (newPlName.isNotBlank()) {
-                            scope.launch {
-                                DesktopLibraryStore.createPlaylist(newPlName)
-                                newPlName = ""
-                            }
-                        }
-                    }) {
-                        Text("Crear")
-                    }
-                }
-                Spacer(Modifier.height(16.dp))
-                LazyColumn(Modifier.fillMaxSize()) {
-                    items(playlists) { pl ->
-                        Card(
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                            colors = CardDefaults.cardColors(containerColor = GlassCardBackground)
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                contentPadding = PaddingValues(bottom = 32.dp)
+            ) {
+                if (instantMatches.isNotEmpty()) {
+                    item {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Column(Modifier.padding(14.dp)) {
-                                Text(pl.name, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                                Text("${pl.songs.size} canciones", color = Color.Gray, fontSize = 12.sp)
-                            }
-                        }
-                    }
-                }
-            }
-            3 -> {
-                if (!spotifySession.isLoggedIn) {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Icon(Icons.Default.Radio, contentDescription = null, tint = SpotifyBrandGreen, modifier = Modifier.size(54.dp))
-                            Spacer(Modifier.height(16.dp))
-                            Text("Tu cuenta de Spotify no está conectada", fontWeight = FontWeight.Bold, fontSize = 18.sp, color = Color.White)
-                            Text("Conéctate fácilmente desde Ajustes con tu navegador para ver tus playlists y canciones que te gustan.", color = Color.Gray, fontSize = 13.sp)
-                            Spacer(Modifier.height(16.dp))
-                            Button(
-                                onClick = onNavigateToSettings,
-                                colors = ButtonDefaults.buttonColors(containerColor = SpotifyBrandGreen),
-                                shape = RoundedCornerShape(10.dp)
-                            ) {
-                                Text("Ir a Ajustes para Conectar")
-                            }
-                        }
-                    }
-                } else {
-                    if (selectedSpotifyPlaylistTracks != null) {
-                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 12.dp)) {
-                            IconButton(onClick = { selectedSpotifyPlaylistTracks = null }) {
-                                Icon(Icons.Default.ArrowBack, contentDescription = "Volver", tint = Color.White)
-                            }
+                            Text("En tu biblioteca y reproducciones", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color.White)
                             Spacer(Modifier.width(8.dp))
-                            Text(selectedSpotifyPlaylistName, fontWeight = FontWeight.Bold, fontSize = 18.sp, color = Color.White)
-                        }
-
-                        if (isLoadingSpotifyTracks) {
-                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                CircularProgressIndicator()
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .background(Color(0x331DB954))
+                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                            ) {
+                                Text("Recomendado para ti", color = Color(0xFF1DB954), fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
                             }
-                        } else {
-                            LazyColumn(Modifier.fillMaxSize()) {
-                                items(selectedSpotifyPlaylistTracks.orEmpty()) { item ->
-                                    val track = item.track
-                                    if (track != null) {
-                                        SpotifyTrackRow(
-                                            track = track,
-                                            onPlay = {
-                                                player.setPreparing(
-                                                    DesktopMediaItem(
-                                                        id = track.id,
-                                                        title = track.name,
-                                                        artist = track.artists.joinToString(", ") { it.name },
-                                                        uri = "",
-                                                        durationMs = track.durationMs.toLong(),
-                                                        thumbnailUrl = track.album?.images?.firstOrNull()?.url,
-                                                        audioFormat = "Buscando en YouTube..."
-                                                    )
-                                                )
-                                                scope.launch {
-                                                    val ytSong = DesktopSpotifyStore.matchSpotifyTrackToYouTube(track)
-                                                    if (ytSong != null) {
-                                                        playTrack(
-                                                            scope = scope,
-                                                            player = player,
-                                                            songId = ytSong.id,
-                                                            title = track.name,
-                                                            artist = track.artists.joinToString(", ") { it.name },
-                                                            durationSeconds = ytSong.duration ?: (track.durationMs / 1000),
-                                                            thumbnailUrl = track.album?.images?.firstOrNull()?.url ?: ytSong.thumbnail
-                                                        )
-                                                    }
-                                                }
-                                            }
+                        }
+                    }
+
+                    items(instantMatches) { match ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(Color(0x252A2E3D))
+                                .clickable {
+                                    when (match) {
+                                        is LibraryMatchItem.Spotify -> onPlaySpotifyTrack(match.track)
+                                        is LibraryMatchItem.Local -> onPlayTrack(
+                                            match.song.id,
+                                            match.song.title,
+                                            match.song.artist,
+                                            (match.song.durationMs / 1000).toInt(),
+                                            match.song.thumbnailUrl
                                         )
                                     }
                                 }
-                            }
-                        }
-                    } else {
-                        var spotifySubTab by remember { mutableStateOf(0) }
-                        TabRow(
-                            selectedTabIndex = spotifySubTab,
-                            containerColor = Color.Transparent,
-                            contentColor = SpotifyBrandGreen
+                                .padding(10.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Tab(selected = spotifySubTab == 0, onClick = { spotifySubTab = 0 }, text = { Text("Canciones que me gustan (${spotifyLiked.size})") })
-                            Tab(selected = spotifySubTab == 1, onClick = { spotifySubTab = 1 }, text = { Text("Playlists de Spotify (${spotifyPlaylists.size})") })
+                            val img = rememberNetworkImage(match.thumbnail)
+                            if (img != null) {
+                                Image(
+                                    bitmap = img,
+                                    contentDescription = match.title,
+                                    modifier = Modifier.size(46.dp).clip(RoundedCornerShape(6.dp)),
+                                    contentScale = ContentScale.Crop
+                                )
+                            } else {
+                                Box(
+                                    modifier = Modifier.size(46.dp).clip(RoundedCornerShape(6.dp)).background(Color(0xFF2A2E3D)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(Icons.Default.MusicNote, contentDescription = null, tint = Color.Gray)
+                                }
+                            }
+                            Spacer(Modifier.width(12.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(match.title, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = Color.White, maxLines = 1)
+                                Text("${match.artist} • ${match.sourceLabel}", fontSize = 12.sp, color = Color(0xFF9CA3AF), maxLines = 1)
+                            }
+                            IconButton(onClick = {
+                                when (match) {
+                                    is LibraryMatchItem.Spotify -> onPlaySpotifyTrack(match.track)
+                                    is LibraryMatchItem.Local -> onPlayTrack(
+                                        match.song.id,
+                                        match.song.title,
+                                        match.song.artist,
+                                        (match.song.durationMs / 1000).toInt(),
+                                        match.song.thumbnailUrl
+                                    )
+                                }
+                            }) {
+                                Icon(Icons.Default.PlayArrow, contentDescription = "Reproducir", tint = Color(0xFF1DB954))
+                            }
                         }
-                        Spacer(Modifier.height(14.dp))
+                    }
+                }
 
-                        if (spotifySubTab == 0) {
-                            if (spotifyLiked.isEmpty()) {
-                                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                    Text("Cargando canciones guardadas de Spotify...", color = Color.Gray)
-                                }
-                            } else {
-                                LazyColumn(Modifier.fillMaxSize()) {
-                                    items(spotifyLiked) { saved ->
-                                        SpotifyTrackRow(
-                                            track = saved.track,
-                                            onPlay = {
-                                                player.setPreparing(
-                                                    DesktopMediaItem(
-                                                        id = saved.track.id,
-                                                        title = saved.track.name,
-                                                        artist = saved.track.artists.joinToString(", ") { it.name },
-                                                        uri = "",
-                                                        durationMs = saved.track.durationMs.toLong(),
-                                                        thumbnailUrl = saved.track.album?.images?.firstOrNull()?.url,
-                                                        audioFormat = "Buscando en YouTube..."
-                                                    )
-                                                )
-                                                scope.launch {
-                                                    val ytSong = DesktopSpotifyStore.matchSpotifyTrackToYouTube(saved.track)
-                                                    if (ytSong != null) {
-                                                        playTrack(
-                                                            scope = scope,
-                                                            player = player,
-                                                            songId = ytSong.id,
-                                                            title = saved.track.name,
-                                                            artist = saved.track.artists.joinToString(", ") { it.name },
-                                                            durationSeconds = ytSong.duration ?: (saved.track.durationMs / 1000),
-                                                            thumbnailUrl = saved.track.album?.images?.firstOrNull()?.url ?: ytSong.thumbnail
-                                                        )
-                                                    }
-                                                }
-                                            }
-                                        )
-                                    }
-                                }
-                            }
-                        } else {
-                            if (spotifyPlaylists.isEmpty()) {
-                                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                    Text("No se encontraron playlists en tu cuenta de Spotify.", color = Color.Gray)
-                                }
-                            } else {
-                                LazyColumn(Modifier.fillMaxSize()) {
-                                    items(spotifyPlaylists) { pl ->
-                                        Card(
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .padding(vertical = 4.dp)
-                                                .clickable {
-                                                    selectedSpotifyPlaylistName = pl.name
-                                                    isLoadingSpotifyTracks = true
-                                                    selectedSpotifyPlaylistTracks = emptyList()
-                                                    scope.launch {
-                                                        selectedSpotifyPlaylistTracks = DesktopSpotifyStore.fetchPlaylistTracks(pl.id)
-                                                        isLoadingSpotifyTracks = false
-                                                    }
-                                                },
-                                            colors = CardDefaults.cardColors(containerColor = GlassCardBackground),
-                                            shape = RoundedCornerShape(10.dp)
-                                        ) {
-                                            Row(
-                                                Modifier.fillMaxWidth().padding(12.dp),
-                                                verticalAlignment = Alignment.CenterVertically
-                                            ) {
-                                                val plThumb = rememberNetworkImage(pl.images.firstOrNull()?.url)
-                                                if (plThumb != null) {
-                                                    Image(
-                                                        bitmap = plThumb,
-                                                        contentDescription = null,
-                                                        modifier = Modifier.size(50.dp).clip(RoundedCornerShape(8.dp)),
-                                                        contentScale = ContentScale.Crop
-                                                    )
-                                                } else {
-                                                    Box(
-                                                        modifier = Modifier.size(50.dp).clip(RoundedCornerShape(8.dp)).background(Color(0xFF232730)),
-                                                        contentAlignment = Alignment.Center
-                                                    ) {
-                                                        Icon(Icons.Default.QueueMusic, contentDescription = null, tint = SpotifyBrandGreen)
-                                                    }
-                                                }
-                                                Spacer(Modifier.width(14.dp))
-                                                Column(Modifier.weight(1f)) {
-                                                    Text(pl.name, fontWeight = FontWeight.SemiBold, fontSize = 15.sp, color = Color.White)
-                                                    Text(
-                                                        "${pl.tracks?.total ?: 0} canciones • Creada por ${pl.owner?.displayName ?: "Spotify"}",
-                                                        color = Color.Gray,
-                                                        fontSize = 12.sp
-                                                    )
-                                                }
-                                                Icon(Icons.Default.ChevronRight, contentDescription = null, tint = Color.Gray)
-                                            }
-                                        }
-                                    }
-                                }
-                            }
+                item {
+                    Text(
+                        if (instantMatches.isNotEmpty()) "Resultados en línea de YouTube Music" else "Resultados de búsqueda",
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White,
+                        modifier = Modifier.padding(top = 8.dp)
+                    )
+                }
+
+                if (isSearching && results.isEmpty()) {
+                    item {
+                        Box(Modifier.fillMaxWidth().height(140.dp), contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator()
                         }
+                    }
+                } else if (results.isEmpty()) {
+                    item {
+                        Box(Modifier.fillMaxWidth().height(100.dp), contentAlignment = Alignment.Center) {
+                            Text("No se encontraron resultados para '$query'", color = Color.Gray)
+                        }
+                    }
+                } else {
+                    items(results) { song ->
+                        SongRowItem(
+                            song = song,
+                            onPlay = {
+                                onPlayTrack(song.id, song.title, song.artists.joinToString(", ") { it.name }, song.duration, song.thumbnail)
+                            }
+                        )
                     }
                 }
             }

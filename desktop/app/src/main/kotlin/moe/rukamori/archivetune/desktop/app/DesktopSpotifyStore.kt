@@ -1,5 +1,6 @@
 package moe.rukamori.archivetune.desktop.app
 
+import kotlinx.coroutines.async
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -13,6 +14,8 @@ import moe.rukamori.archivetune.innertube.YouTube
 import moe.rukamori.archivetune.innertube.models.SongItem
 import moe.rukamori.archivetune.spotify.Spotify
 import moe.rukamori.archivetune.spotify.SpotifyAuth
+import moe.rukamori.archivetune.spotify.models.SpotifyAlbum
+import moe.rukamori.archivetune.spotify.models.SpotifyArtist
 import moe.rukamori.archivetune.spotify.models.SpotifyPlaylist
 import moe.rukamori.archivetune.spotify.models.SpotifyPlaylistTrack
 import moe.rukamori.archivetune.spotify.models.SpotifySavedTrack
@@ -60,6 +63,21 @@ object DesktopSpotifyStore {
 
     private val _playlists = MutableStateFlow<List<SpotifyPlaylist>>(emptyList())
     val playlists: StateFlow<List<SpotifyPlaylist>> = _playlists.asStateFlow()
+
+    private val _recentlyPlayed = MutableStateFlow<List<SpotifyTrack>>(emptyList())
+    val recentlyPlayed: StateFlow<List<SpotifyTrack>> = _recentlyPlayed.asStateFlow()
+
+    private val _topTracks = MutableStateFlow<List<SpotifyTrack>>(emptyList())
+    val topTracks: StateFlow<List<SpotifyTrack>> = _topTracks.asStateFlow()
+
+    private val _topArtists = MutableStateFlow<List<SpotifyArtist>>(emptyList())
+    val topArtists: StateFlow<List<SpotifyArtist>> = _topArtists.asStateFlow()
+
+    private val _newReleases = MutableStateFlow<List<SpotifyAlbum>>(emptyList())
+    val newReleases: StateFlow<List<SpotifyAlbum>> = _newReleases.asStateFlow()
+
+    private val _isHomeLoading = MutableStateFlow(false)
+    val isHomeLoading: StateFlow<Boolean> = _isHomeLoading.asStateFlow()
 
     init {
         loadSession()
@@ -191,6 +209,10 @@ object DesktopSpotifyStore {
         _session.value = cleared
         _likedSongs.value = emptyList()
         _playlists.value = emptyList()
+        _recentlyPlayed.value = emptyList()
+        _topTracks.value = emptyList()
+        _topArtists.value = emptyList()
+        _newReleases.value = emptyList()
         saveSession(cleared)
     }
 
@@ -238,6 +260,38 @@ object DesktopSpotifyStore {
                 _playlists.value = pls.items
             }
         }
+
+        refreshHomeFeed()
+    }
+
+    suspend fun refreshHomeFeed() = withContext(Dispatchers.IO) {
+        if (!_session.value.isLoggedIn) return@withContext
+        _isHomeLoading.value = true
+        try {
+            val recentDeferred = async { runCatching { Spotify.recentlyPlayed(limit = 20).getOrNull() } }
+            val topTracksDeferred = async { runCatching { Spotify.topTracks(limit = 25).getOrNull() } }
+            val topArtistsDeferred = async { runCatching { Spotify.topArtists(limit = 20).getOrNull() } }
+            val newReleasesDeferred = async { runCatching { Spotify.newReleases(limit = 20).getOrNull() } }
+
+            recentDeferred.await().getOrNull()?.let { res ->
+                val tracks = res?.items?.map { it.track }?.distinctBy { it.id }.orEmpty()
+                if (tracks.isNotEmpty()) _recentlyPlayed.value = tracks
+            }
+            topTracksDeferred.await().getOrNull()?.let { res ->
+                val tracks = res?.items.orEmpty()
+                if (tracks.isNotEmpty()) _topTracks.value = tracks
+            }
+            topArtistsDeferred.await().getOrNull()?.let { res ->
+                val artists = res?.items.orEmpty()
+                if (artists.isNotEmpty()) _topArtists.value = artists
+            }
+            newReleasesDeferred.await().getOrNull()?.let { res ->
+                val albums = res?.albums?.items.orEmpty()
+                if (albums.isNotEmpty()) _newReleases.value = albums
+            }
+        } finally {
+            _isHomeLoading.value = false
+        }
     }
 
     suspend fun fetchPlaylistTracks(playlistId: String): List<SpotifyPlaylistTrack> = withContext(Dispatchers.IO) {
@@ -259,6 +313,25 @@ object DesktopSpotifyStore {
                 val exact = songs.find { s ->
                     s.title.contains(track.name, ignoreCase = true) ||
                     track.name.contains(s.title, ignoreCase = true)
+                } ?: songs.first()
+                matchCache[cacheKey] = exact
+                return@withContext exact
+            }
+        } catch (_: Exception) {}
+        null
+    }
+
+    suspend fun matchTitleArtistToYouTube(title: String, artist: String): SongItem? = withContext(Dispatchers.IO) {
+        val cacheKey = "${title}_${artist}".trim()
+        matchCache[cacheKey]?.let { return@withContext it }
+        val query = "$title $artist".trim()
+        try {
+            val res = YouTube.search(query, filter = SearchFilter.FILTER_SONG).getOrNull()
+            val songs = res?.items?.filterIsInstance<SongItem>().orEmpty()
+            if (songs.isNotEmpty()) {
+                val exact = songs.find { s ->
+                    s.title.contains(title, ignoreCase = true) ||
+                    title.contains(s.title, ignoreCase = true)
                 } ?: songs.first()
                 matchCache[cacheKey] = exact
                 return@withContext exact
