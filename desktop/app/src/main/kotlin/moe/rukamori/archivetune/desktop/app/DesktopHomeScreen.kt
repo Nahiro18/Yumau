@@ -1,6 +1,7 @@
 package moe.rukamori.archivetune.desktop.app
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -8,14 +9,12 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AccountCircle
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.TrendingUp
-import androidx.compose.material.icons.filled.Whatshot
+import androidx.compose.material.icons.automirrored.filled.QueueMusic
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -28,12 +27,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import moe.rukamori.archivetune.innertube.SearchFilter
-import moe.rukamori.archivetune.innertube.YouTube
-import moe.rukamori.archivetune.innertube.models.SongItem
 import moe.rukamori.archivetune.spotify.models.SpotifyAlbum
 import moe.rukamori.archivetune.spotify.models.SpotifyArtist
 import moe.rukamori.archivetune.spotify.models.SpotifyTrack
@@ -41,7 +35,9 @@ import java.util.Calendar
 
 private val HomeGlassCard = Color(0x352A2E3D)
 private val HomeSpotifyGreen = Color(0xFF1DB954)
-private val HomeCardHover = Color(0x503F4457)
+private val LikedHeroGradient = Brush.linearGradient(
+    listOf(Color(0xFF450AF5), Color(0xFF8E8EE5), Color(0xFF1DB954))
+)
 
 private fun getGreeting(): String {
     val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
@@ -52,9 +48,6 @@ private fun getGreeting(): String {
     }
 }
 
-private var cachedTrendingSongs: List<SongItem> = emptyList()
-private var lastTrendingFetchTime: Long = 0L
-
 @Composable
 fun DesktopHomeScreen(
     onPlayTrack: (songId: String, title: String, artist: String, durationSeconds: Int?, thumbnailUrl: String?) -> Unit,
@@ -63,69 +56,35 @@ fun DesktopHomeScreen(
 ) {
     val session by DesktopSpotifyStore.session.collectAsState()
     val recentlyPlayed by DesktopSpotifyStore.recentlyPlayed.collectAsState()
-    val topTracks by DesktopSpotifyStore.topTracks.collectAsState()
-    val topArtists by DesktopSpotifyStore.topArtists.collectAsState()
+    val recentItems by DesktopSpotifyStore.recentItems.collectAsState()
+    val totalLikedSongs by DesktopSpotifyStore.totalLikedSongs.collectAsState()
+    val statsTimeRange by DesktopSpotifyStore.statsTimeRange.collectAsState()
+    val statsTracks by DesktopSpotifyStore.statsTracks.collectAsState()
+    val statsArtists by DesktopSpotifyStore.statsArtists.collectAsState()
+    val isStatsLoading by DesktopSpotifyStore.isStatsLoading.collectAsState()
     val newReleases by DesktopSpotifyStore.newReleases.collectAsState()
     val isHomeLoading by DesktopSpotifyStore.isHomeLoading.collectAsState()
 
-    var selectedSource by remember { mutableStateOf(if (session.isLoggedIn) 0 else 1) } // 0: Spotify, 1: YouTube
-    var ytTrendingSongs by remember { mutableStateOf(cachedTrendingSongs) }
-    var isYtLoading by remember { mutableStateOf(cachedTrendingSongs.isEmpty()) }
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(Unit) {
         if (session.isLoggedIn) {
             DesktopSpotifyStore.refreshHomeFeed()
         }
-        val now = System.currentTimeMillis()
-        if (cachedTrendingSongs.isNotEmpty() && now - lastTrendingFetchTime < 10 * 60 * 1000L) {
-            ytTrendingSongs = cachedTrendingSongs
-            isYtLoading = false
-            return@LaunchedEffect
-        }
-        isYtLoading = true
-        withContext(Dispatchers.IO) {
-            try {
-                val chartResult = YouTube.getChartsPage().getOrNull()
-                val songs = chartResult?.sections?.flatMap { it.items }?.filterIsInstance<SongItem>() ?: emptyList()
-                val fetched = if (songs.isNotEmpty()) {
-                    songs
-                } else {
-                    YouTube.search("Top Hits 2026", filter = SearchFilter.FILTER_SONG).getOrNull()
-                        ?.items?.filterIsInstance<SongItem>() ?: emptyList()
-                }
-                cachedTrendingSongs = fetched
-                lastTrendingFetchTime = System.currentTimeMillis()
-                ytTrendingSongs = fetched
-            } catch (_: Exception) {
-                if (cachedTrendingSongs.isNotEmpty()) {
-                    ytTrendingSongs = cachedTrendingSongs
-                } else {
-                    val fallback = YouTube.search("Top Music", filter = SearchFilter.FILTER_SONG).getOrNull()
-                        ?.items?.filterIsInstance<SongItem>() ?: emptyList()
-                    cachedTrendingSongs = fallback
-                    lastTrendingFetchTime = System.currentTimeMillis()
-                    ytTrendingSongs = fallback
-                }
-            } finally {
-                isYtLoading = false
-            }
-        }
     }
 
     LaunchedEffect(session.isLoggedIn) {
         if (session.isLoggedIn) {
-            selectedSource = 0
             DesktopSpotifyStore.refreshHomeFeed()
         }
     }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.spacedBy(20.dp),
-        contentPadding = PaddingValues(bottom = 32.dp)
+        verticalArrangement = Arrangement.spacedBy(22.dp),
+        contentPadding = PaddingValues(bottom = 36.dp)
     ) {
-        // Top Greeting Header
+        // 1. Top Greeting Header
         item {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -144,14 +103,18 @@ fun DesktopHomeScreen(
                         color = Color.White
                     )
                     Text(
-                        text = if (session.isLoggedIn) "Música personalizada de tu cuenta de Spotify y YouTube" else "Explora tendencias y recomendaciones en alta fidelidad",
+                        text = if (session.isLoggedIn) {
+                            "Tu música personalizada de Spotify en alta fidelidad"
+                        } else {
+                            "Conecta tu cuenta de Spotify para acceder a tu biblioteca, listas y estadísticas"
+                        },
                         fontSize = 13.sp,
                         color = Color(0xFF9CA3AF)
                     )
                 }
 
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (session.isLoggedIn) {
+                if (session.isLoggedIn) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
                         val avatar = rememberNetworkImage(session.avatarUrl)
                         if (avatar != null) {
                             Image(
@@ -180,216 +143,356 @@ fun DesktopHomeScreen(
             }
         }
 
-        // Source Switcher Chips
-        item {
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                FilterChip(
-                    selected = selectedSource == 0,
-                    onClick = { selectedSource = 0 },
-                    label = {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Box(
-                                modifier = Modifier
-                                    .size(8.dp)
-                                    .clip(CircleShape)
-                                    .background(if (session.isLoggedIn) HomeSpotifyGreen else Color.Gray)
-                            )
-                            Spacer(Modifier.width(6.dp))
-                            Text("Tu Spotify")
-                        }
-                    },
-                    colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = Color(0x331DB954),
-                        selectedLabelColor = Color.White
-                    )
-                )
-
-                FilterChip(
-                    selected = selectedSource == 1,
-                    onClick = { selectedSource = 1 },
-                    label = {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.Whatshot, contentDescription = null, modifier = Modifier.size(16.dp), tint = Color(0xFFFF453A))
-                            Spacer(Modifier.width(6.dp))
-                            Text("Tendencias YouTube")
-                        }
-                    },
-                    colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = Color(0x33FF453A),
-                        selectedLabelColor = Color.White
-                    )
-                )
-            }
-        }
-
-        // Spotify Content
-        if (selectedSource == 0) {
-            if (!session.isLoggedIn) {
-                item {
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(16.dp),
-                        colors = CardDefaults.cardColors(containerColor = Color(0x221DB954))
+        // 2. Banner if Not Logged In
+        if (!session.isLoggedIn) {
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color(0x221DB954)),
+                    border = BorderStroke(1.dp, Color(0x331DB954))
+                ) {
+                    Row(
+                        modifier = Modifier.padding(24.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Row(
-                            modifier = Modifier.padding(20.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                        Box(
+                            modifier = Modifier
+                                .size(56.dp)
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(HomeSpotifyGreen),
+                            contentAlignment = Alignment.Center
                         ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(54.dp)
-                                    .clip(RoundedCornerShape(14.dp))
-                                    .background(HomeSpotifyGreen),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(Icons.Default.TrendingUp, contentDescription = null, tint = Color.Black, modifier = Modifier.size(32.dp))
-                            }
-                            Spacer(Modifier.width(16.dp))
-                            Column(Modifier.weight(1f)) {
-                                Text("Conecta tu cuenta de Spotify", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color.White)
-                                Text(
-                                    "Vincula tu cuenta desde Ajustes para escuchar tus canciones recientes, listas y recomendaciones personalizadas.",
-                                    fontSize = 12.sp,
-                                    color = Color.LightGray
-                                )
-                            }
-                            Spacer(Modifier.width(16.dp))
-                            Button(
-                                onClick = onNavigateToSettings,
-                                colors = ButtonDefaults.buttonColors(containerColor = HomeSpotifyGreen),
-                                shape = RoundedCornerShape(10.dp)
-                            ) {
-                                Text("Conectar ahora", color = Color.Black, fontWeight = FontWeight.SemiBold)
-                            }
+                            Icon(Icons.Default.MusicNote, contentDescription = null, tint = Color.Black, modifier = Modifier.size(32.dp))
                         }
-                    }
-                }
-
-                // Show YouTube trends below if not logged in
-                item {
-                    Text("Tendencias Populares", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                }
-                items(ytTrendingSongs) { song ->
-                    SongRowItem(
-                        song = song,
-                        onPlay = {
-                            onPlayTrack(song.id, song.title, song.artists.joinToString(", ") { it.name }, song.duration, song.thumbnail)
+                        Spacer(Modifier.width(18.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("Conecta tu cuenta de Spotify", fontWeight = FontWeight.Bold, fontSize = 18.sp, color = Color.White)
+                            Text(
+                                "Vincula tu sesión de Spotify desde Ajustes mediante tu navegador para sincronizar tus canciones favoritas, playlists, artistas más escuchados y estadísticas.",
+                                fontSize = 13.sp,
+                                color = Color.LightGray
+                            )
                         }
-                    )
-                }
-            } else {
-                // User is logged into Spotify!
-                if (isHomeLoading && recentlyPlayed.isEmpty() && topTracks.isEmpty()) {
-                    item {
-                        Box(Modifier.fillMaxWidth().height(200.dp), contentAlignment = Alignment.Center) {
-                            CircularProgressIndicator(color = HomeSpotifyGreen)
-                        }
-                    }
-                } else {
-                    // 1. Escuchado recientemente (Quick Picks Grid)
-                    if (recentlyPlayed.isNotEmpty()) {
-                        item {
-                            Text("Escuchado recientemente", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                        }
-                        item {
-                            val chunked = recentlyPlayed.take(8).chunked(2)
-                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                for (pair in chunked) {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                                    ) {
-                                        for (track in pair) {
-                                            QuickPickCard(
-                                                track = track,
-                                                modifier = Modifier.weight(1f),
-                                                onPlay = { onPlaySpotifyTrack(track) }
-                                            )
-                                        }
-                                        if (pair.size == 1) {
-                                            Spacer(Modifier.weight(1f))
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // 2. Tus más escuchadas (Top Tracks)
-                    if (topTracks.isNotEmpty()) {
-                        item {
-                            Spacer(Modifier.height(8.dp))
-                            Text("Tus canciones más escuchadas", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                        }
-                        item {
-                            LazyRow(
-                                horizontalArrangement = Arrangement.spacedBy(14.dp),
-                                contentPadding = PaddingValues(horizontal = 2.dp)
-                            ) {
-                                items(topTracks) { track ->
-                                    TrackCard(
-                                        track = track,
-                                        onPlay = { onPlaySpotifyTrack(track) }
-                                    )
-                                }
-                            }
-                        }
-                    }
-
-                    // 3. Tus artistas favoritos (Top Artists)
-                    if (topArtists.isNotEmpty()) {
-                        item {
-                            Spacer(Modifier.height(8.dp))
-                            Text("Tus artistas favoritos", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                        }
-                        item {
-                            LazyRow(
-                                horizontalArrangement = Arrangement.spacedBy(16.dp),
-                                contentPadding = PaddingValues(horizontal = 2.dp)
-                            ) {
-                                items(topArtists) { artist ->
-                                    ArtistCard(artist = artist)
-                                }
-                            }
-                        }
-                    }
-
-                    // 4. Nuevos lanzamientos (New Releases)
-                    if (newReleases.isNotEmpty()) {
-                        item {
-                            Spacer(Modifier.height(8.dp))
-                            Text("Nuevos lanzamientos para ti", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                        }
-                        item {
-                            LazyRow(
-                                horizontalArrangement = Arrangement.spacedBy(14.dp),
-                                contentPadding = PaddingValues(horizontal = 2.dp)
-                            ) {
-                                items(newReleases) { album ->
-                                    AlbumCard(album = album)
-                                }
-                            }
+                        Spacer(Modifier.width(18.dp))
+                        Button(
+                            onClick = onNavigateToSettings,
+                            colors = ButtonDefaults.buttonColors(containerColor = HomeSpotifyGreen),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Text("Ir a Ajustes para Conectar", color = Color.Black, fontWeight = FontWeight.Bold)
                         }
                     }
                 }
             }
         } else {
-            // YouTube Trending
-            if (isYtLoading) {
+            // Logged in: 100% Spotify Experience!
+
+            // 3. Top Quick Grid: Recently Played Playlists & Mixes (Like Mobile App)
+            item {
+                Text("Recientes y Accesos Rápidos", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color.White)
+            }
+
+            item {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    // Row 1: Liked Songs Hero Card + First Recent Item
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        // Liked Songs Quick Card
+                        Card(
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(64.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable {
+                                    val firstLiked = DesktopSpotifyStore.likedSongs.value.firstOrNull()?.track
+                                    if (firstLiked != null) {
+                                        onPlaySpotifyTrack(firstLiked)
+                                    }
+                                },
+                            colors = CardDefaults.cardColors(containerColor = HomeGlassCard)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxSize(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(64.dp)
+                                        .background(LikedHeroGradient),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(Icons.Default.Favorite, contentDescription = null, tint = Color.White, modifier = Modifier.size(28.dp))
+                                }
+                                Spacer(Modifier.width(12.dp))
+                                Column(Modifier.weight(1f)) {
+                                    Text("Canciones que te gustan", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = Color.White)
+                                    Text(
+                                        "${if (totalLikedSongs > 0) totalLikedSongs else DesktopSpotifyStore.likedSongs.value.size} canciones",
+                                        fontSize = 11.sp,
+                                        color = Color(0xFF9CA3AF)
+                                    )
+                                }
+                                Box(
+                                    modifier = Modifier
+                                        .padding(end = 10.dp)
+                                        .size(36.dp)
+                                        .clip(CircleShape)
+                                        .background(HomeSpotifyGreen),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color.Black, modifier = Modifier.size(22.dp))
+                                }
+                            }
+                        }
+
+                        // Second Item (First from recentItems or first recent track)
+                        val secondItem = recentItems.firstOrNull()
+                        if (secondItem != null) {
+                            QuickRecentItemCard(
+                                item = secondItem,
+                                modifier = Modifier.weight(1f),
+                                onPlay = {
+                                    scope.launch {
+                                        val tracks = DesktopSpotifyStore.fetchPlaylistTracks(secondItem.id)
+                                        val first = tracks.firstOrNull()?.track
+                                        if (first != null) onPlaySpotifyTrack(first)
+                                    }
+                                }
+                            )
+                        } else {
+                            val firstRecentTrack = recentlyPlayed.firstOrNull()
+                            if (firstRecentTrack != null) {
+                                QuickPickCard(
+                                    track = firstRecentTrack,
+                                    modifier = Modifier.weight(1f),
+                                    onPlay = { onPlaySpotifyTrack(firstRecentTrack) }
+                                )
+                            } else {
+                                Spacer(Modifier.weight(1f))
+                            }
+                        }
+                    }
+
+                    // Row 2 & beyond: Remaining recent items (up to 6 more)
+                    val remainingRecent = recentItems.drop(1).take(6)
+                    val chunked = remainingRecent.chunked(2)
+                    for (pair in chunked) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            for (item in pair) {
+                                QuickRecentItemCard(
+                                    item = item,
+                                    modifier = Modifier.weight(1f),
+                                    onPlay = {
+                                        scope.launch {
+                                            val tracks = DesktopSpotifyStore.fetchPlaylistTracks(item.id)
+                                            val first = tracks.firstOrNull()?.track
+                                            if (first != null) onPlaySpotifyTrack(first)
+                                        }
+                                    }
+                                )
+                            }
+                            if (pair.size == 1) {
+                                Spacer(Modifier.weight(1f))
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 4. Tus Estadísticas de Spotify (Top Tracks & Artists with Time Range Filter)
+            item {
+                Spacer(Modifier.height(4.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text("Tus Estadísticas de Spotify", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                        Text("Tus hábitos de escucha y artistas más reproducidos", fontSize = 12.sp, color = Color(0xFF9CA3AF))
+                    }
+
+                    // Time Range Filter Chips (4 Semanas, 6 Meses, Histórico)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        val ranges = listOf(
+                            "short_term" to "4 Semanas",
+                            "medium_term" to "6 Meses",
+                            "long_term" to "Histórico"
+                        )
+                        ranges.forEach { (code, label) ->
+                            FilterChip(
+                                selected = statsTimeRange == code,
+                                onClick = { scope.launch { DesktopSpotifyStore.setStatsTimeRange(code) } },
+                                label = { Text(label, fontSize = 11.sp) },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = HomeSpotifyGreen.copy(alpha = 0.25f),
+                                    selectedLabelColor = HomeSpotifyGreen
+                                )
+                            )
+                        }
+                    }
+                }
+            }
+
+            if (isStatsLoading && statsTracks.isEmpty()) {
                 item {
-                    Box(Modifier.fillMaxWidth().height(200.dp), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                    Box(Modifier.fillMaxWidth().height(120.dp), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(color = HomeSpotifyGreen)
                     }
                 }
             } else {
-                items(ytTrendingSongs) { song ->
-                    SongRowItem(
-                        song = song,
-                        onPlay = {
-                            onPlayTrack(song.id, song.title, song.artists.joinToString(", ") { it.name }, song.duration, song.thumbnail)
+                // Top Tracks Ranked List
+                if (statsTracks.isNotEmpty()) {
+                    item {
+                        Text("Canciones Más Escuchadas", fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = Color.LightGray)
+                    }
+                    item {
+                        LazyRow(
+                            horizontalArrangement = Arrangement.spacedBy(14.dp),
+                            contentPadding = PaddingValues(horizontal = 2.dp)
+                        ) {
+                            itemsIndexed(statsTracks.take(15)) { index, track ->
+                                RankedTrackCard(
+                                    rank = index + 1,
+                                    track = track,
+                                    onPlay = { onPlaySpotifyTrack(track) }
+                                )
+                            }
                         }
+                    }
+                }
+
+                // Top Artists Circles
+                if (statsArtists.isNotEmpty()) {
+                    item {
+                        Text("Tus Artistas Más Escuchados", fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = Color.LightGray)
+                    }
+                    item {
+                        LazyRow(
+                            horizontalArrangement = Arrangement.spacedBy(18.dp),
+                            contentPadding = PaddingValues(horizontal = 2.dp)
+                        ) {
+                            items(statsArtists.take(15)) { artist ->
+                                ArtistCard(artist = artist)
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 5. Escuchado recientemente (Recently Played Tracks)
+            if (recentlyPlayed.isNotEmpty()) {
+                item {
+                    Spacer(Modifier.height(4.dp))
+                    Text("Escuchado Recientemente", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                }
+                item {
+                    LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(14.dp),
+                        contentPadding = PaddingValues(horizontal = 2.dp)
+                    ) {
+                        items(recentlyPlayed) { track ->
+                            TrackCard(
+                                track = track,
+                                onPlay = { onPlaySpotifyTrack(track) }
+                            )
+                        }
+                    }
+                }
+            }
+
+            // 6. Nuevos lanzamientos (New Releases)
+            if (newReleases.isNotEmpty()) {
+                item {
+                    Spacer(Modifier.height(4.dp))
+                    Text("Nuevos Lanzamientos Para Ti", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                }
+                item {
+                    LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(14.dp),
+                        contentPadding = PaddingValues(horizontal = 2.dp)
+                    ) {
+                        items(newReleases) { album ->
+                            AlbumCard(album = album)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun QuickRecentItemCard(
+    item: DesktopRecentItem,
+    modifier: Modifier = Modifier,
+    onPlay: () -> Unit
+) {
+    Card(
+        modifier = modifier
+            .height(64.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .clickable { onPlay() },
+        colors = CardDefaults.cardColors(containerColor = HomeGlassCard)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxSize(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            val img = rememberNetworkImage(item.thumbnailUrl)
+            if (img != null) {
+                Image(
+                    bitmap = img,
+                    contentDescription = item.title,
+                    modifier = Modifier.size(64.dp),
+                    contentScale = ContentScale.Crop
+                )
+            } else {
+                Box(
+                    modifier = Modifier.size(64.dp).background(Color(0xFF2A2E3D)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        if (item.isPlaylist) Icons.AutoMirrored.Filled.QueueMusic else Icons.Default.Album,
+                        contentDescription = null,
+                        tint = Color.Gray
                     )
                 }
+            }
+
+            Spacer(Modifier.width(12.dp))
+            Column(
+                modifier = Modifier.weight(1f).padding(end = 8.dp),
+                verticalArrangement = Arrangement.Center
+            ) {
+                Text(
+                    text = item.title,
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 13.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = item.subtitle,
+                    color = Color(0xFF9CA3AF),
+                    fontSize = 11.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            IconButton(
+                onClick = onPlay,
+                modifier = Modifier.padding(end = 6.dp).size(34.dp)
+            ) {
+                Icon(Icons.Default.PlayArrow, contentDescription = "Reproducir", tint = HomeSpotifyGreen)
             }
         }
     }
@@ -403,7 +506,7 @@ private fun QuickPickCard(
 ) {
     Card(
         modifier = modifier
-            .height(58.dp)
+            .height(64.dp)
             .clip(RoundedCornerShape(8.dp))
             .clickable { onPlay() },
         colors = CardDefaults.cardColors(containerColor = HomeGlassCard)
@@ -417,19 +520,19 @@ private fun QuickPickCard(
                 Image(
                     bitmap = img,
                     contentDescription = track.name,
-                    modifier = Modifier.size(58.dp),
+                    modifier = Modifier.size(64.dp),
                     contentScale = ContentScale.Crop
                 )
             } else {
                 Box(
-                    modifier = Modifier.size(58.dp).background(Color(0xFF2A2E3D)),
+                    modifier = Modifier.size(64.dp).background(Color(0xFF2A2E3D)),
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color.Gray)
                 }
             }
 
-            Spacer(Modifier.width(10.dp))
+            Spacer(Modifier.width(12.dp))
             Column(
                 modifier = Modifier.weight(1f).padding(end = 8.dp),
                 verticalArrangement = Arrangement.Center
@@ -453,10 +556,81 @@ private fun QuickPickCard(
 
             IconButton(
                 onClick = onPlay,
-                modifier = Modifier.padding(end = 4.dp).size(32.dp)
+                modifier = Modifier.padding(end = 6.dp).size(34.dp)
             ) {
                 Icon(Icons.Default.PlayArrow, contentDescription = "Reproducir", tint = HomeSpotifyGreen)
             }
+        }
+    }
+}
+
+@Composable
+private fun RankedTrackCard(
+    rank: Int,
+    track: SpotifyTrack,
+    onPlay: () -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .width(150.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .clickable { onPlay() },
+        colors = CardDefaults.cardColors(containerColor = HomeGlassCard)
+    ) {
+        Column(modifier = Modifier.padding(10.dp)) {
+            Box {
+                val img = rememberNetworkImage(track.album?.images?.firstOrNull()?.url)
+                Box(
+                    modifier = Modifier
+                        .size(130.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(Color(0xFF2A2E3D)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (img != null) {
+                        Image(
+                            bitmap = img,
+                            contentDescription = track.name,
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Crop
+                        )
+                    } else {
+                        Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color.Gray)
+                    }
+                }
+
+                // Rank Badge (#1, #2, etc.)
+                Surface(
+                    modifier = Modifier.padding(6.dp),
+                    color = if (rank <= 3) HomeSpotifyGreen else Color(0xDD000000),
+                    shape = RoundedCornerShape(6.dp)
+                ) {
+                    Text(
+                        text = "#$rank",
+                        color = if (rank <= 3) Color.Black else Color.White,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 11.sp,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = track.name,
+                fontWeight = FontWeight.Bold,
+                fontSize = 13.sp,
+                color = Color.White,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = track.artists.joinToString(", ") { it.name },
+                fontSize = 11.sp,
+                color = Color.Gray,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
         }
     }
 }
@@ -585,6 +759,8 @@ private fun AlbumCard(album: SpotifyAlbum) {
                         modifier = Modifier.fillMaxSize(),
                         contentScale = ContentScale.Crop
                     )
+                } else {
+                    Icon(Icons.Default.Album, contentDescription = null, tint = Color.Gray)
                 }
             }
 

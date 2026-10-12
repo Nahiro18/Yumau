@@ -23,11 +23,11 @@ data class ResolvedAudioStream(
 
 object DesktopStreamResolver {
     private val defaultClientOrder = listOf(
-        YouTubeClient.VISIONOS,
         YouTubeClient.ANDROID_VR_NO_AUTH,
-        YouTubeClient.ANDROID_VR_1_61_48,
         YouTubeClient.IOS,
         YouTubeClient.ANDROID_MUSIC,
+        YouTubeClient.VISIONOS,
+        YouTubeClient.ANDROID_VR_1_61_48,
         YouTubeClient.WEB_REMIX,
     )
 
@@ -36,12 +36,12 @@ object DesktopStreamResolver {
 
     fun getClientCandidates(preferredClientName: String?): List<YouTubeClient> {
         val preferred = when (preferredClientName) {
-            "VISIONOS" -> YouTubeClient.VISIONOS
             "ANDROID_VR" -> YouTubeClient.ANDROID_VR_NO_AUTH
             "IOS" -> YouTubeClient.IOS
             "ANDROID_MUSIC" -> YouTubeClient.ANDROID_MUSIC
+            "VISIONOS" -> YouTubeClient.VISIONOS
             "WEB_REMIX" -> YouTubeClient.WEB_REMIX
-            else -> YouTubeClient.VISIONOS
+            else -> YouTubeClient.ANDROID_VR_NO_AUTH
         }
         return listOf(preferred) + defaultClientOrder.filter { it != preferred }
     }
@@ -54,7 +54,7 @@ object DesktopStreamResolver {
         playbackSource: String = "YT_MUSIC",
         flacQuality: String = "HI_RES",
         preferredQuality: String = "HIGH",
-        preferredClientName: String = "VISIONOS"
+        preferredClientName: String = "ANDROID_VR"
     ) {
         val cacheKey = if (playbackSource == "FLAC") "${videoId}_FLAC_${flacQuality}" else "${videoId}_$preferredQuality"
         if (streamCache.containsKey(cacheKey)) return
@@ -82,7 +82,7 @@ object DesktopStreamResolver {
         playbackSource: String = "YT_MUSIC",
         flacQuality: String = "HI_RES",
         preferredQuality: String = "HIGH",
-        preferredClientName: String = "VISIONOS"
+        preferredClientName: String = "ANDROID_VR"
     ): ResolvedAudioStream = withContext(Dispatchers.IO) {
         val cacheKey = if (playbackSource == "FLAC") "${videoId}_FLAC_${flacQuality}" else "${videoId}_$preferredQuality"
         streamCache[cacheKey]?.let { (cachedStream, timestamp) ->
@@ -108,8 +108,8 @@ object DesktopStreamResolver {
 
         val clients = getClientCandidates(preferredClientName)
 
-        // Fast parallel race of top 2 clients for ultra-fast startup (<2s)
-        val topClients = clients.take(2)
+        // Fast parallel race of top 3 clients for ultra-fast startup (<1s)
+        val topClients = clients.take(3)
         val candidateChannel = kotlinx.coroutines.channels.Channel<ResolvedAudioStream>(capacity = topClients.size)
         val probeJobs = topClients.map { client ->
             launch {
@@ -120,7 +120,7 @@ object DesktopStreamResolver {
             }
         }
 
-        val fastResult = withTimeoutOrNull(3000L) {
+        val fastResult = withTimeoutOrNull(3500L) {
             candidateChannel.receiveCatching().getOrNull()
         }
 
@@ -130,8 +130,8 @@ object DesktopStreamResolver {
             return@withContext fastResult
         }
 
-        // Sequential fallback for remaining clients if top 2 failed
-        for (client in clients.drop(2)) {
+        // Sequential fallback for remaining clients if top 3 failed
+        for (client in clients.drop(3)) {
             val stream = tryResolveClient(videoId, client, preferredQuality, durationMs)
             if (stream != null) {
                 streamCache[cacheKey] = stream to System.currentTimeMillis()
@@ -143,7 +143,7 @@ object DesktopStreamResolver {
         ResolvedAudioStream(
             url = "https://www.youtube.com/watch?v=$videoId",
             durationMs = durationMs,
-            formatLabel = "AUTO"
+            formatLabel = "WEB • OPUS"
         )
     }
 

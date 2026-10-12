@@ -285,6 +285,7 @@ fun YumaApp(player: DesktopPlayer) {
     var currentLyrics by remember { mutableStateOf<List<LyricLine>>(emptyList()) }
     var rawPlainLyrics by remember { mutableStateOf<String?>(null) }
     var isLyricsLoading by remember { mutableStateOf(false) }
+    var isNowPlayingSidePanelOpen by remember { mutableStateOf(false) }
 
     val queue by player.queue.collectAsState()
     val currentIndex by player.currentIndex.collectAsState()
@@ -395,10 +396,25 @@ fun YumaApp(player: DesktopPlayer) {
                             )
                         }
                     }
+
+                    AnimatedVisibility(
+                        visible = isNowPlayingSidePanelOpen,
+                        enter = fadeIn() + expandHorizontally(),
+                        exit = fadeOut() + shrinkHorizontally()
+                    ) {
+                        NowPlayingSidePanel(
+                            player = player,
+                            lyrics = currentLyrics,
+                            plainLyrics = rawPlainLyrics,
+                            isLoadingLyrics = isLyricsLoading,
+                            onClose = { isNowPlayingSidePanelOpen = false }
+                        )
+                    }
                 }
 
                 PlayerBar(
                     player = player,
+                    onToggleSidePanel = { isNowPlayingSidePanelOpen = !isNowPlayingSidePanelOpen },
                     onOpenLyrics = {
                         if (selectedSection != 4) {
                             previousSection = selectedSection
@@ -1264,6 +1280,7 @@ fun StoredSongRow(stored: StoredSong, onPlay: () -> Unit) {
 @Composable
 fun PlayerBar(
     player: DesktopPlayer,
+    onToggleSidePanel: () -> Unit = {},
     onOpenLyrics: () -> Unit,
     onOpenQueue: () -> Unit
 ) {
@@ -1298,7 +1315,11 @@ fun PlayerBar(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Row(
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable { onToggleSidePanel() }
+                        .padding(horizontal = 4.dp, vertical = 2.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     if (thumbBitmap != null) {
@@ -1523,3 +1544,210 @@ fun PlayerBar(
         }
     }
 }
+
+@Composable
+fun NowPlayingSidePanel(
+    player: DesktopPlayer,
+    lyrics: List<LyricLine>,
+    plainLyrics: String?,
+    isLoadingLyrics: Boolean,
+    onClose: () -> Unit,
+) {
+    val queue by player.queue.collectAsState()
+    val index by player.currentIndex.collectAsState()
+    val current = queue.getOrNull(index)
+    val position by player.positionMs.collectAsState()
+    val duration by player.durationMs.collectAsState()
+    val currentFormat by player.currentFormat.collectAsState()
+
+    val thumbBitmap = rememberNetworkImage(current?.thumbnailUrl)
+    val listState = rememberLazyListState()
+    val coroutineScope = rememberCoroutineScope()
+
+    val currentLineIndex = remember(lyrics, position) {
+        LyricsParser.getCurrentLineIndex(lyrics, position)
+    }
+
+    LaunchedEffect(currentLineIndex) {
+        if (currentLineIndex >= 0 && !listState.isScrollInProgress) {
+            coroutineScope.launch {
+                listState.animateScrollToItem((currentLineIndex - 2).coerceAtLeast(0))
+            }
+        }
+    }
+
+    Surface(
+        modifier = Modifier
+            .width(340.dp)
+            .fillMaxHeight(),
+        color = Color(0xFF13151D),
+        border = BorderStroke(1.dp, Color(0x22FFFFFF))
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(16.dp)
+        ) {
+            // Header: Title & Close Button
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    "Reproduciendo ahora",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp,
+                    color = Color.White
+                )
+                IconButton(onClick = onClose, modifier = Modifier.size(32.dp)) {
+                    Icon(Icons.Default.Close, contentDescription = "Cerrar", tint = Color.LightGray)
+                }
+            }
+
+            Spacer(Modifier.height(14.dp))
+
+            // Big Album Cover Art (280x280 aspect ratio 1:1)
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(1f)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(Color(0xFF232634)),
+                contentAlignment = Alignment.Center
+            ) {
+                if (thumbBitmap != null) {
+                    Image(
+                        bitmap = thumbBitmap,
+                        contentDescription = current?.title,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop
+                    )
+                } else {
+                    Icon(
+                        Icons.Default.MusicNote,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(72.dp)
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(14.dp))
+
+            // Track metadata & Audio Quality badge
+            Text(
+                current?.title ?: "Sin reproducción",
+                fontWeight = FontWeight.Bold,
+                fontSize = 17.sp,
+                color = Color.White,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Spacer(Modifier.height(3.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    current?.artist ?: "",
+                    fontSize = 13.sp,
+                    color = Color(0xFF9CA3AF),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+
+                val badge = currentFormat ?: current?.audioFormat
+                if (!badge.isNullOrBlank()) {
+                    Surface(
+                        color = Color(0xFF2D224C),
+                        shape = RoundedCornerShape(6.dp),
+                    ) {
+                        Text(
+                            badge,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFFA78BFA),
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(14.dp))
+            HorizontalDivider(color = Color(0x22FFFFFF))
+            Spacer(Modifier.height(10.dp))
+
+            // Synced Lyrics Subheader
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.Mic, contentDescription = null, tint = Color(0xFFA78BFA), modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Letras sincronizadas", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
+            }
+
+            Spacer(Modifier.height(8.dp))
+
+            // Lyrics Scrollable Content
+            Box(Modifier.weight(1f).fillMaxWidth()) {
+                if (isLoadingLyrics) {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(color = MaterialTheme.colorScheme.primary, modifier = Modifier.size(28.dp))
+                    }
+                } else if (lyrics.isNotEmpty()) {
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(vertical = 12.dp)
+                    ) {
+                        itemsIndexed(lyrics) { idx, line ->
+                            val isCurrent = idx == currentLineIndex
+                            val itemFontSize = if (isCurrent) 16.sp else 13.sp
+                            val itemColor = when {
+                                isCurrent -> Color.White
+                                else -> Color.White.copy(alpha = 0.35f)
+                            }
+                            val itemWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal
+
+                            Text(
+                                line.text,
+                                fontSize = itemFontSize,
+                                fontWeight = itemWeight,
+                                color = itemColor,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .clickable { player.seekTo(line.timestampMs) }
+                                    .padding(vertical = 5.dp, horizontal = 4.dp)
+                            )
+                        }
+                    }
+                } else if (!plainLyrics.isNullOrBlank()) {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(vertical = 10.dp)
+                    ) {
+                        item {
+                            Text(
+                                plainLyrics,
+                                fontSize = 13.sp,
+                                color = Color(0xFFD1D5DB),
+                                lineHeight = 19.sp
+                            )
+                        }
+                    }
+                } else {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text(
+                            "Letras no disponibles",
+                            color = Color.Gray,
+                            fontSize = 13.sp
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+

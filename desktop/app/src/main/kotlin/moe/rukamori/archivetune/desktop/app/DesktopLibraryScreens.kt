@@ -52,7 +52,9 @@ fun DesktopLibraryScreen(
     val localPlaylists by DesktopLibraryStore.playlists.collectAsState()
     val spotifySession by DesktopSpotifyStore.session.collectAsState()
     val spotifyLiked by DesktopSpotifyStore.likedSongs.collectAsState()
+    val totalLikedSongs by DesktopSpotifyStore.totalLikedSongs.collectAsState()
     val spotifyPlaylists by DesktopSpotifyStore.playlists.collectAsState()
+    val totalPlaylists by DesktopSpotifyStore.totalPlaylists.collectAsState()
 
     var activePlaylist by remember { mutableStateOf<SpotifyPlaylist?>(null) }
     var activePlaylistTracks by remember { mutableStateOf<List<SpotifyPlaylistTrack>?>(null) }
@@ -102,6 +104,7 @@ fun DesktopLibraryScreen(
     if (showingLikedSongsDetail) {
         LikedSongsDetailView(
             spotifyLiked = spotifyLiked,
+            totalLikedCount = if (totalLikedSongs > 0) totalLikedSongs else spotifyLiked.size,
             localFavorites = favorites,
             onBack = { showingLikedSongsDetail = false },
             onPlaySpotifyTrack = onPlaySpotifyTrack,
@@ -136,10 +139,12 @@ fun DesktopLibraryScreen(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
+            val displaySpotifyTracksCount = if (totalLikedSongs > 0) totalLikedSongs else spotifyLiked.size
+            val displaySpotifyPlsCount = if (totalPlaylists > 0) totalPlaylists else spotifyPlaylists.size
             val filterOptions = listOf(
                 "Todo",
-                "Spotify (${if (spotifySession.isLoggedIn) spotifyPlaylists.size + spotifyLiked.size else 0})",
-                "Playlists (${localPlaylists.size + (if (spotifySession.isLoggedIn) spotifyPlaylists.size else 0)})",
+                "Spotify (${if (spotifySession.isLoggedIn) displaySpotifyPlsCount + displaySpotifyTracksCount else 0})",
+                "Playlists (${localPlaylists.size + (if (spotifySession.isLoggedIn) displaySpotifyPlsCount else 0)})",
                 "Favoritos (${favorites.size})",
                 "Historial (${history.size})"
             )
@@ -168,7 +173,7 @@ fun DesktopLibraryScreen(
                     // Hero Card: Canciones que te gustan
                     item {
                         LikedSongsHeroCard(
-                            spotifyCount = spotifyLiked.size,
+                            spotifyCount = if (totalLikedSongs > 0) totalLikedSongs else spotifyLiked.size,
                             favoritesCount = favorites.size,
                             isLoggedIn = spotifySession.isLoggedIn,
                             onClick = { showingLikedSongsDetail = true },
@@ -650,7 +655,7 @@ private fun SpotifyPlaylistDetailView(
                     Text(desc, fontSize = 12.sp, color = Color.LightGray, maxLines = 2)
                 }
                 Spacer(Modifier.height(6.dp))
-                Text("${tracks.size} canciones", fontSize = 13.sp, color = Color.Gray)
+                Text("${playlist.tracks?.total ?: tracks.size} canciones", fontSize = 13.sp, color = Color.Gray)
             }
         }
 
@@ -748,6 +753,7 @@ private fun SpotifyPlaylistDetailView(
 @Composable
 private fun LikedSongsDetailView(
     spotifyLiked: List<moe.rukamori.archivetune.spotify.models.SpotifySavedTrack>,
+    totalLikedCount: Int = spotifyLiked.size,
     localFavorites: List<StoredSong>,
     onBack: () -> Unit,
     onPlaySpotifyTrack: (SpotifyTrack) -> Unit,
@@ -781,7 +787,7 @@ private fun LikedSongsDetailView(
             Spacer(Modifier.width(18.dp))
             Column(Modifier.weight(1f)) {
                 Text("Canciones que te gustan", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                Text("${spotifyLiked.size} canciones en Spotify", fontSize = 13.sp, color = Color.Gray)
+                Text("$totalLikedCount canciones en Spotify", fontSize = 13.sp, color = Color.Gray)
             }
             Button(
                 onClick = onPlayAll,

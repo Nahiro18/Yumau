@@ -16,6 +16,7 @@ import moe.rukamori.archivetune.spotify.Spotify
 import moe.rukamori.archivetune.spotify.SpotifyAuth
 import moe.rukamori.archivetune.spotify.models.SpotifyAlbum
 import moe.rukamori.archivetune.spotify.models.SpotifyArtist
+import moe.rukamori.archivetune.spotify.models.SpotifyHomeFeedItem
 import moe.rukamori.archivetune.spotify.models.SpotifyPlaylist
 import moe.rukamori.archivetune.spotify.models.SpotifyPlaylistTrack
 import moe.rukamori.archivetune.spotify.models.SpotifySavedTrack
@@ -46,6 +47,15 @@ data class SpotifySessionData(
     val isLoggedIn: Boolean = false,
 )
 
+data class DesktopRecentItem(
+    val id: String,
+    val title: String,
+    val subtitle: String,
+    val thumbnailUrl: String?,
+    val isPlaylist: Boolean,
+    val trackCount: Int? = null,
+)
+
 object DesktopSpotifyStore {
     private val configDir = File(System.getProperty("user.home"), ".config/YumaPlayer").apply { mkdirs() }
     private val sessionFile = File(configDir, "spotify_session.json")
@@ -61,17 +71,38 @@ object DesktopSpotifyStore {
     private val _likedSongs = MutableStateFlow<List<SpotifySavedTrack>>(emptyList())
     val likedSongs: StateFlow<List<SpotifySavedTrack>> = _likedSongs.asStateFlow()
 
+    private val _totalLikedSongs = MutableStateFlow(0)
+    val totalLikedSongs: StateFlow<Int> = _totalLikedSongs.asStateFlow()
+
     private val _playlists = MutableStateFlow<List<SpotifyPlaylist>>(emptyList())
     val playlists: StateFlow<List<SpotifyPlaylist>> = _playlists.asStateFlow()
 
+    private val _totalPlaylists = MutableStateFlow(0)
+    val totalPlaylists: StateFlow<Int> = _totalPlaylists.asStateFlow()
+
     private val _recentlyPlayed = MutableStateFlow<List<SpotifyTrack>>(emptyList())
     val recentlyPlayed: StateFlow<List<SpotifyTrack>> = _recentlyPlayed.asStateFlow()
+
+    private val _recentItems = MutableStateFlow<List<DesktopRecentItem>>(emptyList())
+    val recentItems: StateFlow<List<DesktopRecentItem>> = _recentItems.asStateFlow()
 
     private val _topTracks = MutableStateFlow<List<SpotifyTrack>>(emptyList())
     val topTracks: StateFlow<List<SpotifyTrack>> = _topTracks.asStateFlow()
 
     private val _topArtists = MutableStateFlow<List<SpotifyArtist>>(emptyList())
     val topArtists: StateFlow<List<SpotifyArtist>> = _topArtists.asStateFlow()
+
+    private val _statsTimeRange = MutableStateFlow("medium_term") // "short_term", "medium_term", "long_term"
+    val statsTimeRange: StateFlow<String> = _statsTimeRange.asStateFlow()
+
+    private val _statsTracks = MutableStateFlow<List<SpotifyTrack>>(emptyList())
+    val statsTracks: StateFlow<List<SpotifyTrack>> = _statsTracks.asStateFlow()
+
+    private val _statsArtists = MutableStateFlow<List<SpotifyArtist>>(emptyList())
+    val statsArtists: StateFlow<List<SpotifyArtist>> = _statsArtists.asStateFlow()
+
+    private val _isStatsLoading = MutableStateFlow(false)
+    val isStatsLoading: StateFlow<Boolean> = _isStatsLoading.asStateFlow()
 
     private val _newReleases = MutableStateFlow<List<SpotifyAlbum>>(emptyList())
     val newReleases: StateFlow<List<SpotifyAlbum>> = _newReleases.asStateFlow()
@@ -248,16 +279,40 @@ object DesktopSpotifyStore {
         }
 
         runCatching {
-            val liked = Spotify.likedSongs(limit = 50).getOrNull()
+            val liked = Spotify.likedSongs(limit = 50, offset = 0).getOrNull()
             if (liked != null) {
-                _likedSongs.value = liked.items
+                _totalLikedSongs.value = liked.total
+                val allLiked = liked.items.toMutableList()
+                _likedSongs.value = allLiked
+                if (liked.total > 50) {
+                    var offset = 50
+                    while (offset < liked.total && offset < 500) {
+                        val more = Spotify.likedSongs(limit = 50, offset = offset).getOrNull() ?: break
+                        if (more.items.isEmpty()) break
+                        allLiked.addAll(more.items)
+                        _likedSongs.value = allLiked.toList()
+                        offset += 50
+                    }
+                }
             }
         }
 
         runCatching {
-            val pls = Spotify.myPlaylists(limit = 50).getOrNull()
+            val pls = Spotify.myPlaylists(limit = 50, offset = 0).getOrNull()
             if (pls != null) {
-                _playlists.value = pls.items
+                _totalPlaylists.value = pls.total
+                val allPls = pls.items.toMutableList()
+                _playlists.value = allPls
+                if (pls.total > 50) {
+                    var offset = 50
+                    while (offset < pls.total && offset < 200) {
+                        val more = Spotify.myPlaylists(limit = 50, offset = offset).getOrNull() ?: break
+                        if (more.items.isEmpty()) break
+                        allPls.addAll(more.items)
+                        _playlists.value = allPls.toList()
+                        offset += 50
+                    }
+                }
             }
         }
 
@@ -280,6 +335,7 @@ object DesktopSpotifyStore {
             val topTracksDeferred = async { runCatching { Spotify.topTracks(limit = 25).getOrNull() } }
             val topArtistsDeferred = async { runCatching { Spotify.topArtists(limit = 20).getOrNull() } }
             val newReleasesDeferred = async { runCatching { Spotify.newReleases(limit = 20).getOrNull() } }
+            val homeFeedDeferred = async { runCatching { Spotify.home(sectionItemsLimit = 10).getOrNull() } }
 
             recentDeferred.await().getOrNull()?.let { res ->
                 val tracks = res.items.map { it.track }.distinctBy { it.id }
@@ -287,23 +343,112 @@ object DesktopSpotifyStore {
             }
             topTracksDeferred.await().getOrNull()?.let { res ->
                 val tracks = res.items
-                if (tracks.isNotEmpty()) _topTracks.value = tracks
+                if (tracks.isNotEmpty()) {
+                    _topTracks.value = tracks
+                    if (_statsTracks.value.isEmpty()) _statsTracks.value = tracks
+                }
             }
             topArtistsDeferred.await().getOrNull()?.let { res ->
                 val artists = res.items
-                if (artists.isNotEmpty()) _topArtists.value = artists
+                if (artists.isNotEmpty()) {
+                    _topArtists.value = artists
+                    if (_statsArtists.value.isEmpty()) _statsArtists.value = artists
+                }
             }
             newReleasesDeferred.await().getOrNull()?.let { res ->
                 val albums = res.albums?.items.orEmpty()
                 if (albums.isNotEmpty()) _newReleases.value = albums
+            }
+
+            // Extract recent items from Spotify Home feed
+            homeFeedDeferred.await().getOrNull()?.let { feed ->
+                val foundItems = mutableListOf<DesktopRecentItem>()
+                for (section in feed.sections) {
+                    if (section.isShortsOrRecent) {
+                        for (item in section.items) {
+                            when (item) {
+                                is SpotifyHomeFeedItem.Playlist -> {
+                                    foundItems.add(
+                                        DesktopRecentItem(
+                                            id = item.id,
+                                            title = item.name,
+                                            subtitle = item.ownerName ?: "Playlist",
+                                            thumbnailUrl = item.imageUrl,
+                                            isPlaylist = true,
+                                            trackCount = item.totalCount
+                                        )
+                                    )
+                                }
+                                is SpotifyHomeFeedItem.Album -> {
+                                    foundItems.add(
+                                        DesktopRecentItem(
+                                            id = item.id,
+                                            title = item.name,
+                                            subtitle = item.artists.joinToString(", ") { it.name },
+                                            thumbnailUrl = item.imageUrl,
+                                            isPlaylist = false,
+                                            trackCount = null
+                                        )
+                                    )
+                                }
+                                else -> {}
+                            }
+                        }
+                    }
+                }
+                if (foundItems.isNotEmpty()) {
+                    _recentItems.value = foundItems.distinctBy { it.id }.take(8)
+                }
+            }
+
+            // Fallback for recent items if home feed had no recent section: use user's playlists
+            if (_recentItems.value.isEmpty() && _playlists.value.isNotEmpty()) {
+                _recentItems.value = _playlists.value.take(8).map { pl ->
+                    DesktopRecentItem(
+                        id = pl.id,
+                        title = pl.name,
+                        subtitle = "${pl.tracks?.total ?: 0} canciones",
+                        thumbnailUrl = pl.images.firstOrNull()?.url,
+                        isPlaylist = true,
+                        trackCount = pl.tracks?.total
+                    )
+                }
             }
         } finally {
             _isHomeLoading.value = false
         }
     }
 
+    suspend fun setStatsTimeRange(range: String) = withContext(Dispatchers.IO) {
+        _statsTimeRange.value = range
+        _isStatsLoading.value = true
+        try {
+            val tracksRes = Spotify.topTracks(timeRange = range, limit = 20).getOrNull()
+            if (tracksRes != null && tracksRes.items.isNotEmpty()) {
+                _statsTracks.value = tracksRes.items
+            }
+            val artistsRes = Spotify.topArtists(timeRange = range, limit = 20).getOrNull()
+            if (artistsRes != null && artistsRes.items.isNotEmpty()) {
+                _statsArtists.value = artistsRes.items
+            }
+        } finally {
+            _isStatsLoading.value = false
+        }
+    }
+
     suspend fun fetchPlaylistTracks(playlistId: String): List<SpotifyPlaylistTrack> = withContext(Dispatchers.IO) {
-        Spotify.playlistTracks(playlistId, limit = 100).getOrNull()?.items.orEmpty()
+        val firstPage = Spotify.playlistTracks(playlistId, limit = 100, offset = 0).getOrNull()
+            ?: return@withContext emptyList()
+        val allTracks = firstPage.items.toMutableList()
+        val total = firstPage.total
+        var offset = 100
+        while (offset < total && offset < 500) {
+            val page = Spotify.playlistTracks(playlistId, limit = 100, offset = offset).getOrNull() ?: break
+            if (page.items.isEmpty()) break
+            allTracks.addAll(page.items)
+            offset += 100
+        }
+        allTracks
     }
 
     private const val MAX_MATCH_CACHE = 250
