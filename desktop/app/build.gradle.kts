@@ -23,6 +23,8 @@ dependencies {
     implementation(project(":core"))
     implementation(project(":core:innertube"))
     implementation(project(":lyrics:lrclib"))
+    implementation(project(":lyrics:kugou"))
+    implementation(project(":lyrics:simpmusic"))
     implementation(project(":spotifycore"))
     implementation(project(":morideobfuscator"))
     implementation(project(":flaccore"))

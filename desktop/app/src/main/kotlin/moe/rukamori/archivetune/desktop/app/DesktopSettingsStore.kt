@@ -12,6 +12,7 @@ import java.io.File
 
 @Serializable
 data class DesktopAppSettings(
+    // Reproducción y Audio
     val playbackSource: String = "YT_MUSIC", // "YT_MUSIC", "FLAC"
     val flacQuality: String = "HI_RES", // "CD", "HI_RES", "MAX"
     val qobuzAppId: String = "",
@@ -22,14 +23,45 @@ data class DesktopAppSettings(
     val volumeNormalization: Boolean = true,
     val skipSilence: Boolean = false,
     val autoSkipNextOnError: Boolean = true,
+    val seekDurationSeconds: Int = 10, // 5, 10, 15, 30
+
+    // Letras
     val autoScrollLyrics: Boolean = true,
+    val lyricsClick: Boolean = true,
+    val lyricsLineBlur: Boolean = true,
+    val lyricsTextSize: Float = 22f, // 16f .. 36f
+    val lyricsLineSpacing: Float = 1.2f, // 1.0f .. 2.0f
+    val enableLrclib: Boolean = true,
+    val enableKugou: Boolean = true,
+    val enableSimpMusic: Boolean = true,
+    val lyricsProviderOrder: String = "LRCLIB,KuGou,SimpMusic",
+
+    // Apariencia
+    val darkMode: String = "AUTO", // "ON", "OFF", "AUTO"
+    val pureBlack: Boolean = false,
+    val appFont: String = "DEFAULT", // "DEFAULT", "SYSTEM"
+    val defaultTab: Int = 0, // 0: Home, 1: Search, 2: Library
+    val disableAnimations: Boolean = false,
+
+    // Contenido
+    val contentLanguage: String = "system",
+    val contentCountry: String = "system",
+    val hideExplicit: Boolean = false,
+
+    // Integraciones
     val discordRpcEnabled: Boolean = false,
+    val lastFmUsername: String = "",
+    val lastFmSessionKey: String = "",
+    val lastFmScrobblingEnabled: Boolean = false,
 )
 
 object DesktopSettingsStore {
     private val configDir = File(System.getProperty("user.home"), ".config/YumaPlayer").apply { mkdirs() }
     private val settingsFile = File(configDir, "settings.json")
     val cacheDir = File(configDir, "cache").apply { mkdirs() }
+    val audioCacheDir = File(cacheDir, "audio").apply { mkdirs() }
+    val imagesCacheDir = File(cacheDir, "images").apply { mkdirs() }
+    val lyricsCacheDir = File(cacheDir, "lyrics").apply { mkdirs() }
 
     private val json = Json {
         prettyPrint = true
@@ -61,6 +93,22 @@ object DesktopSettingsStore {
     }
 
     suspend fun clearCache(): Long = withContext(Dispatchers.IO) {
+        clearDirectory(cacheDir)
+    }
+
+    suspend fun clearAudioCache(): Long = withContext(Dispatchers.IO) {
+        clearDirectory(audioCacheDir)
+    }
+
+    suspend fun clearImageCache(): Long = withContext(Dispatchers.IO) {
+        clearDirectory(imagesCacheDir)
+    }
+
+    suspend fun clearLyricsCache(): Long = withContext(Dispatchers.IO) {
+        clearDirectory(lyricsCacheDir)
+    }
+
+    private fun clearDirectory(dir: File): Long {
         var freedBytes = 0L
         fun deleteRecursively(f: File) {
             if (f.isDirectory) {
@@ -69,19 +117,39 @@ object DesktopSettingsStore {
             freedBytes += f.length()
             f.delete()
         }
-        if (cacheDir.exists()) {
-            cacheDir.listFiles()?.forEach { deleteRecursively(it) }
+        if (dir.exists()) {
+            dir.listFiles()?.forEach { deleteRecursively(it) }
         }
-        freedBytes
+        return freedBytes
     }
 
-    fun getCacheSizeBytes(): Long {
+    fun getCacheSizeBytes(): Long = getDirectorySizeBytes(cacheDir)
+    fun getAudioCacheSizeBytes(): Long = getDirectorySizeBytes(audioCacheDir)
+    fun getImageCacheSizeBytes(): Long = getDirectorySizeBytes(imagesCacheDir)
+    fun getLyricsCacheSizeBytes(): Long = getDirectorySizeBytes(lyricsCacheDir)
+
+    private fun getDirectorySizeBytes(dir: File): Long {
         var total = 0L
-        if (cacheDir.exists()) {
-            cacheDir.walkTopDown().forEach {
+        if (dir.exists()) {
+            dir.walkTopDown().forEach {
                 if (it.isFile) total += it.length()
             }
         }
         return total
+    }
+
+    fun exportSettingsJson(): String {
+        return json.encodeToString(_settings.value)
+    }
+
+    suspend fun importSettingsJson(jsonContent: String): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val imported = json.decodeFromString<DesktopAppSettings>(jsonContent)
+            _settings.value = imported
+            settingsFile.writeText(json.encodeToString(imported))
+            true
+        } catch (_: Exception) {
+            false
+        }
     }
 }
