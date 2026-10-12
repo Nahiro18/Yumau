@@ -70,8 +70,16 @@ fun playTrack(
                 thumbnailUrl = thumbnailUrl
             )
         )
-        val quality = DesktopSettingsStore.settings.value.audioQuality
-        val stream = DesktopStreamResolver.resolveStreamUrl(songId, quality)
+        val s = DesktopSettingsStore.settings.value
+        val stream = DesktopStreamResolver.resolveStreamUrl(
+            videoId = songId,
+            title = title,
+            artist = artist,
+            durationMs = initialDurationMs,
+            playbackSource = s.playbackSource,
+            flacQuality = s.flacQuality,
+            preferredQuality = s.audioQuality
+        )
         val finalDurationMs = if (stream.durationMs > 0) stream.durationMs else initialDurationMs
         val media = DesktopMediaItem(
             id = songId,
@@ -100,6 +108,12 @@ fun main() {
     val player = DesktopPlayer()
     try {
         player.init()
+        val s = DesktopSettingsStore.settings.value
+        player.autoSkipNextOnError = s.autoSkipNextOnError
+        player.updateAudioFilters(
+            volumeNormalization = s.volumeNormalization,
+            skipSilence = s.skipSilence
+        )
     } catch (e: Exception) {
         System.err.println("Warning: Player engine init failed: ${e.message}")
     }
@@ -201,7 +215,7 @@ fun YumaApp(player: DesktopPlayer) {
                                 player = player,
                                 onNavigateToSettings = { selectedSection = 3 }
                             )
-                            3 -> SettingsScreen()
+                            3 -> SettingsScreen(player = player)
                             4 -> LyricsScreen(
                                 lyrics = currentLyrics,
                                 plainLyrics = rawPlainLyrics,
@@ -815,7 +829,7 @@ fun LibraryScreen(player: DesktopPlayer, onNavigateToSettings: () -> Unit) {
 }
 
 @Composable
-fun SettingsScreen() {
+fun SettingsScreen(player: DesktopPlayer? = null) {
     val settings by DesktopSettingsStore.settings.collectAsState()
     val spotifySession by DesktopSpotifyStore.session.collectAsState()
     val scope = rememberCoroutineScope()
@@ -825,6 +839,12 @@ fun SettingsScreen() {
     var isBrowserAuthWaiting by remember { mutableStateOf(false) }
     var browserAuthMessage by remember { mutableStateOf<String?>(null) }
     var browserAuthError by remember { mutableStateOf<String?>(null) }
+
+    var qobuzAppIdInput by remember(settings.qobuzAppId) { mutableStateOf(settings.qobuzAppId) }
+    var qobuzAppSecretInput by remember(settings.qobuzAppSecret) { mutableStateOf(settings.qobuzAppSecret) }
+    var qobuzUserAuthTokenInput by remember(settings.qobuzUserAuthToken) { mutableStateOf(settings.qobuzUserAuthToken) }
+    var isQobuzCredentialsExpanded by remember { mutableStateOf(false) }
+    var qobuzSavedMessage by remember { mutableStateOf<String?>(null) }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         Text("Ajustes", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = Color.White)
@@ -974,73 +994,280 @@ fun SettingsScreen() {
             }
         }
 
-        // Calidad de Audio y Streaming (igual a opciones de la app)
+        // Fuente de Transmisión (YouTube Music vs FLAC Lossless de Qobuz)
         Card(
             modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
             colors = CardDefaults.cardColors(containerColor = GlassCardBackground),
             shape = RoundedCornerShape(12.dp)
         ) {
             Column(Modifier.padding(18.dp)) {
-                Text("Calidad de Audio y Streaming", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color.White)
-                Text("Flujo de audio Opus de alta calidad extraído directamente como en la versión móvil", color = Color.Gray, fontSize = 12.sp)
+                Text("Fuente de Transmisión", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color.White)
+                Text("Elige de dónde se extrae y reproduce la música en la aplicación", color = Color.Gray, fontSize = 12.sp)
                 Spacer(Modifier.height(14.dp))
 
-                Text("Resolución de Audio:", fontWeight = FontWeight.Medium, fontSize = 14.sp)
-                Row(Modifier.padding(vertical = 8.dp)) {
-                    listOf(
-                        "HIGH" to "Alta (Opus 160 kbps)",
-                        "MEDIUM" to "Media (128 kbps)",
-                        "LOW" to "Baja (50-70 kbps)"
-                    ).forEach { (code, label) ->
-                        FilterChip(
-                            selected = settings.audioQuality == code,
-                            onClick = {
-                                scope.launch {
-                                    DesktopSettingsStore.updateSettings { it.copy(audioQuality = code) }
-                                }
-                            },
-                            label = { Text(label) },
-                            modifier = Modifier.padding(end = 8.dp)
-                        )
-                    }
+                Row(Modifier.padding(vertical = 4.dp)) {
+                    FilterChip(
+                        selected = settings.playbackSource == "YT_MUSIC",
+                        onClick = {
+                            scope.launch {
+                                DesktopSettingsStore.updateSettings { it.copy(playbackSource = "YT_MUSIC") }
+                            }
+                        },
+                        label = { Text("YouTube Music") },
+                        modifier = Modifier.padding(end = 8.dp)
+                    )
+                    FilterChip(
+                        selected = settings.playbackSource == "FLAC",
+                        onClick = {
+                            scope.launch {
+                                DesktopSettingsStore.updateSettings { it.copy(playbackSource = "FLAC") }
+                            }
+                        },
+                        label = { Text("FLAC Lossless (Qobuz Hi-Res)") },
+                        modifier = Modifier.padding(end = 8.dp)
+                    )
                 }
 
-                Spacer(Modifier.height(8.dp))
-                Text("Cliente de Extracción YouTube:", fontWeight = FontWeight.Medium, fontSize = 14.sp)
-                Row(Modifier.padding(vertical = 8.dp)) {
-                    listOf(
-                        "ANDROID_VR" to "Android VR (Sin restricciones)",
-                        "IOS" to "iOS",
-                        "WEB_REMIX" to "Web Remix"
-                    ).forEach { (code, label) ->
-                        FilterChip(
-                            selected = settings.streamingClient == code,
-                            onClick = {
-                                scope.launch {
-                                    DesktopSettingsStore.updateSettings { it.copy(streamingClient = code) }
+                if (settings.playbackSource == "FLAC") {
+                    Spacer(Modifier.height(12.dp))
+                    Text("Calidad de Transmisión FLAC:", fontWeight = FontWeight.Medium, fontSize = 14.sp)
+                    Row(Modifier.padding(vertical = 8.dp)) {
+                        listOf(
+                            "CD" to "Calidad CD • 16-bit / 44.1 kHz",
+                            "HI_RES" to "Hi-Res • 24-bit / 96 kHz",
+                            "MAX" to "Studio Max • 24-bit / 192 kHz"
+                        ).forEach { (code, label) ->
+                            FilterChip(
+                                selected = settings.flacQuality == code,
+                                onClick = {
+                                    scope.launch {
+                                        DesktopSettingsStore.updateSettings { it.copy(flacQuality = code) }
+                                    }
+                                },
+                                label = { Text(label) },
+                                modifier = Modifier.padding(end = 8.dp)
+                            )
+                        }
+                    }
+
+                    Surface(
+                        color = Color(0xFF1E232E),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)
+                    ) {
+                        Column(Modifier.padding(12.dp)) {
+                            Text(
+                                "El motor de audio transmitirá streams FLAC de alta resolución directamente. Si alguna canción no está disponible en la base de datos FLAC, automáticamente reproducirá la versión Opus de YouTube Music para que nunca se interrumpa tu música.",
+                                color = Color(0xFF94A3B8),
+                                fontSize = 12.sp,
+                                lineHeight = 16.sp
+                            )
+                        }
+                    }
+
+                    Spacer(Modifier.height(4.dp))
+                    TextButton(
+                        onClick = { isQobuzCredentialsExpanded = !isQobuzCredentialsExpanded }
+                    ) {
+                        Text(if (isQobuzCredentialsExpanded) "Ocultar credenciales Qobuz" else "Configurar credenciales / tokens Qobuz (Opcional)")
+                    }
+
+                    if (isQobuzCredentialsExpanded) {
+                        Column(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+                            OutlinedTextField(
+                                value = qobuzAppIdInput,
+                                onValueChange = { qobuzAppIdInput = it },
+                                label = { Text("Qobuz App ID (por defecto 798273057)") },
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                singleLine = true
+                            )
+                            OutlinedTextField(
+                                value = qobuzAppSecretInput,
+                                onValueChange = { qobuzAppSecretInput = it },
+                                label = { Text("Qobuz App Secret (opcional)") },
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                singleLine = true
+                            )
+                            OutlinedTextField(
+                                value = qobuzUserAuthTokenInput,
+                                onValueChange = { qobuzUserAuthTokenInput = it },
+                                label = { Text("Qobuz User Auth Token (token de cuenta)") },
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                singleLine = true
+                            )
+                            Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Button(
+                                    onClick = {
+                                        scope.launch {
+                                            DesktopSettingsStore.updateSettings {
+                                                it.copy(
+                                                    qobuzAppId = qobuzAppIdInput,
+                                                    qobuzAppSecret = qobuzAppSecretInput,
+                                                    qobuzUserAuthToken = qobuzUserAuthTokenInput
+                                                )
+                                            }
+                                            qobuzSavedMessage = "Credenciales guardadas correctamente"
+                                        }
+                                    }
+                                ) {
+                                    Text("Guardar Credenciales")
                                 }
-                            },
-                            label = { Text(label) },
-                            modifier = Modifier.padding(end = 8.dp)
-                        )
+                                if (qobuzSavedMessage != null) {
+                                    Spacer(Modifier.width(12.dp))
+                                    Text(qobuzSavedMessage!!, color = Color(0xFF10B981), fontSize = 13.sp)
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    Spacer(Modifier.height(12.dp))
+                    Text("Resolución de Audio YouTube:", fontWeight = FontWeight.Medium, fontSize = 14.sp)
+                    Row(Modifier.padding(vertical = 8.dp)) {
+                        listOf(
+                            "HIGH" to "Alta (Opus 160 kbps)",
+                            "MEDIUM" to "Media (128 kbps)",
+                            "LOW" to "Baja (50-70 kbps)"
+                        ).forEach { (code, label) ->
+                            FilterChip(
+                                selected = settings.audioQuality == code,
+                                onClick = {
+                                    scope.launch {
+                                        DesktopSettingsStore.updateSettings { it.copy(audioQuality = code) }
+                                    }
+                                },
+                                label = { Text(label) },
+                                modifier = Modifier.padding(end = 8.dp)
+                            )
+                        }
+                    }
+
+                    Spacer(Modifier.height(8.dp))
+                    Text("Cliente de Extracción YouTube:", fontWeight = FontWeight.Medium, fontSize = 14.sp)
+                    Row(Modifier.padding(vertical = 8.dp)) {
+                        listOf(
+                            "ANDROID_VR" to "Android VR (Sin restricciones)",
+                            "IOS" to "iOS",
+                            "WEB_REMIX" to "Web Remix"
+                        ).forEach { (code, label) ->
+                            FilterChip(
+                                selected = settings.streamingClient == code,
+                                onClick = {
+                                    scope.launch {
+                                        DesktopSettingsStore.updateSettings { it.copy(streamingClient = code) }
+                                    }
+                                },
+                                label = { Text(label) },
+                                modifier = Modifier.padding(end = 8.dp)
+                            )
+                        }
                     }
                 }
+            }
+        }
 
-                Spacer(Modifier.height(8.dp))
+        // Reproducción y Audio (Ajustes adaptados del móvil)
+        Card(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+            colors = CardDefaults.cardColors(containerColor = GlassCardBackground),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Column(Modifier.padding(18.dp)) {
+                Text("Reproducción y Audio", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color.White)
+                Text("Ajustes de procesamiento de audio y comportamiento del reproductor", color = Color.Gray, fontSize = 12.sp)
+                Spacer(Modifier.height(14.dp))
+
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Column {
+                    Column(Modifier.weight(1f).padding(end = 16.dp)) {
                         Text("Normalización de Volumen", fontWeight = FontWeight.Medium, fontSize = 14.sp)
-                        Text("Nivelación de ganancia ReplayGain para un volumen uniforme", fontSize = 12.sp, color = Color.Gray)
+                        Text("Nivelación de ganancia ReplayGain para un volumen uniforme entre pistas", fontSize = 12.sp, color = Color.Gray)
                     }
                     Switch(
                         checked = settings.volumeNormalization,
                         onCheckedChange = { checked ->
                             scope.launch {
                                 DesktopSettingsStore.updateSettings { it.copy(volumeNormalization = checked) }
+                                player?.updateAudioFilters(
+                                    volumeNormalization = checked,
+                                    skipSilence = settings.skipSilence
+                                )
+                            }
+                        }
+                    )
+                }
+
+                Spacer(Modifier.height(12.dp))
+                HorizontalDivider(color = Color.White.copy(alpha = 0.08f))
+                Spacer(Modifier.height(12.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f).padding(end = 16.dp)) {
+                        Text("Saltar Silencios", fontWeight = FontWeight.Medium, fontSize = 14.sp)
+                        Text("Omitir silencios al inicio y final de las pistas (filtro silenceremove)", fontSize = 12.sp, color = Color.Gray)
+                    }
+                    Switch(
+                        checked = settings.skipSilence,
+                        onCheckedChange = { checked ->
+                            scope.launch {
+                                DesktopSettingsStore.updateSettings { it.copy(skipSilence = checked) }
+                                player?.updateAudioFilters(
+                                    volumeNormalization = settings.volumeNormalization,
+                                    skipSilence = checked
+                                )
+                            }
+                        }
+                    )
+                }
+
+                Spacer(Modifier.height(12.dp))
+                HorizontalDivider(color = Color.White.copy(alpha = 0.08f))
+                Spacer(Modifier.height(12.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f).padding(end = 16.dp)) {
+                        Text("Auto-saltar canción si hay error", fontWeight = FontWeight.Medium, fontSize = 14.sp)
+                        Text("Avanzar a la siguiente pista automáticamente si un stream falla o expira", fontSize = 12.sp, color = Color.Gray)
+                    }
+                    Switch(
+                        checked = settings.autoSkipNextOnError,
+                        onCheckedChange = { checked ->
+                            scope.launch {
+                                DesktopSettingsStore.updateSettings { it.copy(autoSkipNextOnError = checked) }
+                                player?.autoSkipNextOnError = checked
+                            }
+                        }
+                    )
+                }
+
+                Spacer(Modifier.height(12.dp))
+                HorizontalDivider(color = Color.White.copy(alpha = 0.08f))
+                Spacer(Modifier.height(12.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f).padding(end = 16.dp)) {
+                        Text("Desplazamiento automático de letras", fontWeight = FontWeight.Medium, fontSize = 14.sp)
+                        Text("Hacer auto-scroll al ritmo de la música en la pantalla de líricas", fontSize = 12.sp, color = Color.Gray)
+                    }
+                    Switch(
+                        checked = settings.autoScrollLyrics,
+                        onCheckedChange = { checked ->
+                            scope.launch {
+                                DesktopSettingsStore.updateSettings { it.copy(autoScrollLyrics = checked) }
                             }
                         }
                     )

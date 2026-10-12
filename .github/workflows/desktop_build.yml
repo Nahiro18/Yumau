@@ -12,6 +12,7 @@ on:
       - 'lyrics/**'
       - 'database/**'
       - 'morideobfuscator/**'
+      - 'flaccore/**'
       - 'gradle/**'
       - 'build.gradle.kts'
       - 'settings.gradle.kts'

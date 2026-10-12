@@ -33,14 +33,32 @@ object DesktopStreamResolver {
 
     suspend fun resolveStreamUrl(
         videoId: String,
+        title: String = "",
+        artist: String = "",
+        durationMs: Long = 0L,
+        playbackSource: String = "YT_MUSIC",
+        flacQuality: String = "HI_RES",
         preferredQuality: String = "HIGH"
     ): ResolvedAudioStream = withContext(Dispatchers.IO) {
-        val cacheKey = "${videoId}_$preferredQuality"
+        val cacheKey = if (playbackSource == "FLAC") "${videoId}_FLAC_${flacQuality}" else "${videoId}_$preferredQuality"
         streamCache[cacheKey]?.let { (cachedStream, timestamp) ->
             if (System.currentTimeMillis() - timestamp < CACHE_TTL_MS) {
                 return@withContext cachedStream
             } else {
                 streamCache.remove(cacheKey)
+            }
+        }
+
+        if (playbackSource == "FLAC" && title.isNotBlank()) {
+            val flacStream = DesktopFlacResolver.resolve(
+                title = title,
+                artist = artist,
+                durationMs = durationMs,
+                quality = flacQuality
+            )
+            if (flacStream != null) {
+                streamCache[cacheKey] = flacStream to System.currentTimeMillis()
+                return@withContext flacStream
             }
         }
 

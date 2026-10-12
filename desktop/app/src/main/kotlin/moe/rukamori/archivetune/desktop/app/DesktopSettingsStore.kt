@@ -12,9 +12,16 @@ import java.io.File
 
 @Serializable
 data class DesktopAppSettings(
+    val playbackSource: String = "YT_MUSIC", // "YT_MUSIC", "FLAC"
+    val flacQuality: String = "HI_RES", // "CD", "HI_RES", "MAX"
+    val qobuzAppId: String = "",
+    val qobuzAppSecret: String = "",
+    val qobuzUserAuthToken: String = "",
     val audioQuality: String = "HIGH", // HIGH (Opus 160kbps), MEDIUM (128kbps), LOW (50-70kbps)
     val streamingClient: String = "ANDROID_VR", // ANDROID_VR, IOS, WEB_REMIX
     val volumeNormalization: Boolean = true,
+    val skipSilence: Boolean = false,
+    val autoSkipNextOnError: Boolean = true,
     val autoScrollLyrics: Boolean = true,
     val discordRpcEnabled: Boolean = false,
 )

@@ -64,7 +64,6 @@ if (!skipAndroidModules) {
     include(":lastfm")
     include(":canvas")
     include(":shazamkit")
-    include(":flaccore")
 }
 
 // Pure-JVM library modules (shared between Android and Desktop builds).
@@ -72,6 +71,7 @@ include(":core")
 include(":core:innertube")
 include(":core:audio-dsp")
 include(":spotifycore")
+include(":flaccore")
 include(":lyrics:kugou")
 include(":lyrics:lrclib")
 include(":lyrics:simpmusic")

@@ -146,6 +146,26 @@ class DesktopPlayer(
         if (_currentIndex.value < 0) playIndex(_queue.value.lastIndex)
     }
 
+    var autoSkipNextOnError: Boolean = true
+
+    fun updateAudioFilters(volumeNormalization: Boolean, skipSilence: Boolean) {
+        scope.launch {
+            runCatching {
+                if (volumeNormalization) {
+                    mpv.command(listOf("set_property", "replaygain", "track"))
+                } else {
+                    mpv.command(listOf("set_property", "replaygain", "no"))
+                }
+
+                val filters = mutableListOf<String>()
+                if (skipSilence) {
+                    filters.add("silenceremove=start_periods=1:start_duration=0.5:start_threshold=-50dB:detection=peak")
+                }
+                mpv.command(listOf("set_property", "af", filters.joinToString(",")))
+            }
+        }
+    }
+
     fun playIndex(index: Int) {
         val items = _queue.value
         if (index < 0 || index >= items.size) return
@@ -164,6 +184,10 @@ class DesktopPlayer(
                 _state.value = DesktopPlayerState.PLAYING
             }.onFailure {
                 _state.value = DesktopPlayerState.ERROR
+                if (autoSkipNextOnError && items.size > 1) {
+                    delay(500)
+                    next()
+                }
             }
         }
     }

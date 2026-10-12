@@ -25,6 +25,7 @@ dependencies {
     implementation(project(":lyrics:lrclib"))
     implementation(project(":spotifycore"))
     implementation(project(":morideobfuscator"))
+    implementation(project(":flaccore"))
 
     implementation(compose.desktop.currentOs)
     implementation(compose.material3)
@@ -34,6 +35,7 @@ dependencies {
     implementation(compose.components.resources)
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.kotlinx.serialization.json)
+    implementation(libs.okhttp)
 }
 
 compose.desktop {
