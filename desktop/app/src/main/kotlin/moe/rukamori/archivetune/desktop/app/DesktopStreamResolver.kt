@@ -23,6 +23,7 @@ data class ResolvedAudioStream(
 
 object DesktopStreamResolver {
     private val defaultClientOrder = listOf(
+        YouTubeClient.VISIONOS,
         YouTubeClient.ANDROID_VR_NO_AUTH,
         YouTubeClient.ANDROID_VR_1_61_48,
         YouTubeClient.IOS,
@@ -35,11 +36,12 @@ object DesktopStreamResolver {
 
     fun getClientCandidates(preferredClientName: String?): List<YouTubeClient> {
         val preferred = when (preferredClientName) {
+            "VISIONOS" -> YouTubeClient.VISIONOS
             "ANDROID_VR" -> YouTubeClient.ANDROID_VR_NO_AUTH
             "IOS" -> YouTubeClient.IOS
             "ANDROID_MUSIC" -> YouTubeClient.ANDROID_MUSIC
             "WEB_REMIX" -> YouTubeClient.WEB_REMIX
-            else -> YouTubeClient.ANDROID_VR_NO_AUTH
+            else -> YouTubeClient.VISIONOS
         }
         return listOf(preferred) + defaultClientOrder.filter { it != preferred }
     }
@@ -52,7 +54,7 @@ object DesktopStreamResolver {
         playbackSource: String = "YT_MUSIC",
         flacQuality: String = "HI_RES",
         preferredQuality: String = "HIGH",
-        preferredClientName: String = "ANDROID_VR"
+        preferredClientName: String = "VISIONOS"
     ) {
         val cacheKey = if (playbackSource == "FLAC") "${videoId}_FLAC_${flacQuality}" else "${videoId}_$preferredQuality"
         if (streamCache.containsKey(cacheKey)) return
@@ -80,7 +82,7 @@ object DesktopStreamResolver {
         playbackSource: String = "YT_MUSIC",
         flacQuality: String = "HI_RES",
         preferredQuality: String = "HIGH",
-        preferredClientName: String = "ANDROID_VR"
+        preferredClientName: String = "VISIONOS"
     ): ResolvedAudioStream = withContext(Dispatchers.IO) {
         val cacheKey = if (playbackSource == "FLAC") "${videoId}_FLAC_${flacQuality}" else "${videoId}_$preferredQuality"
         streamCache[cacheKey]?.let { (cachedStream, timestamp) ->
@@ -105,61 +107,35 @@ object DesktopStreamResolver {
         }
 
         val clients = getClientCandidates(preferredClientName)
-        for (client in clients) {
-            try {
-                val response = withTimeoutOrNull(3000L) {
-                    YouTube.player(videoId = videoId, client = client).getOrNull()
-                } ?: continue
 
-                if (response.playabilityStatus.status != "OK") continue
-
-                val formats = response.streamingData?.adaptiveFormats
-                    ?.filter { it.isAudio && it.bitrate > 0 }
-                    .orEmpty()
-
-                if (formats.isEmpty()) continue
-
-                val songDurationMs = response.videoDetails
-                    ?.lengthSeconds
-                    ?.toLongOrNull()
-                    ?.takeIf { it > 0 }
-                    ?.times(1000L) ?: durationMs
-
-                val candidate = selectFormat(formats, preferredQuality) ?: formats.firstOrNull()
-                if (candidate != null) {
-                    // FAST PATH: Use direct URL without heavy JS deobfuscation
-                    val streamUrl = if (!candidate.url.isNullOrBlank()) {
-                        candidate.url
-                    } else {
-                        // CIPHER PATH: Only if format requires signature decipher
-                        withTimeoutOrNull(2500L) {
-                            NewPipeUtils.getStreamUrl(candidate, videoId, client).getOrNull()
-                        } ?: candidate.url
-                    }
-
-                    if (!streamUrl.isNullOrBlank()) {
-                        val isOpus = candidate.mimeType.contains("audio/webm", ignoreCase = true) ||
-                                candidate.mimeType.contains("opus", ignoreCase = true) ||
-                                candidate.itag == 251 || candidate.itag == 250 || candidate.itag == 249
-
-                        val formatLabel = formatAudioQualityLabel(candidate.mimeType, candidate.itag, candidate.bitrate)
-
-                        val resolved = ResolvedAudioStream(
-                            url = streamUrl,
-                            itag = candidate.itag,
-                            mimeType = candidate.mimeType,
-                            bitrate = candidate.bitrate,
-                            isOpus = isOpus,
-                            durationMs = songDurationMs,
-                            clientName = client.clientName,
-                            formatLabel = formatLabel
-                        )
-                        streamCache[cacheKey] = resolved to System.currentTimeMillis()
-                        return@withContext resolved
-                    }
+        // Fast parallel race of top 2 clients for ultra-fast startup (<2s)
+        val topClients = clients.take(2)
+        val candidateChannel = kotlinx.coroutines.channels.Channel<ResolvedAudioStream>(capacity = topClients.size)
+        val probeJobs = topClients.map { client ->
+            launch {
+                val stream = tryResolveClient(videoId, client, preferredQuality, durationMs)
+                if (stream != null) {
+                    candidateChannel.trySend(stream)
                 }
-            } catch (_: Exception) {
-                // Continue to next client candidate
+            }
+        }
+
+        val fastResult = withTimeoutOrNull(3000L) {
+            candidateChannel.receiveCatching().getOrNull()
+        }
+
+        if (fastResult != null) {
+            probeJobs.forEach { it.cancel() }
+            streamCache[cacheKey] = fastResult to System.currentTimeMillis()
+            return@withContext fastResult
+        }
+
+        // Sequential fallback for remaining clients if top 2 failed
+        for (client in clients.drop(2)) {
+            val stream = tryResolveClient(videoId, client, preferredQuality, durationMs)
+            if (stream != null) {
+                streamCache[cacheKey] = stream to System.currentTimeMillis()
+                return@withContext stream
             }
         }
 
@@ -169,6 +145,66 @@ object DesktopStreamResolver {
             durationMs = durationMs,
             formatLabel = "AUTO"
         )
+    }
+
+    private suspend fun tryResolveClient(
+        videoId: String,
+        client: YouTubeClient,
+        preferredQuality: String,
+        durationMs: Long
+    ): ResolvedAudioStream? {
+        return try {
+            val response = withTimeoutOrNull(3000L) {
+                YouTube.player(videoId = videoId, client = client).getOrNull()
+            } ?: return null
+
+            if (response.playabilityStatus.status != "OK") return null
+
+            val formats = response.streamingData?.adaptiveFormats
+                ?.filter { it.isAudio && it.bitrate > 0 }
+                .orEmpty()
+
+            if (formats.isEmpty()) return null
+
+            val songDurationMs = response.videoDetails
+                ?.lengthSeconds
+                ?.toLongOrNull()
+                ?.takeIf { it > 0 }
+                ?.times(1000L) ?: durationMs
+
+            val candidate = selectFormat(formats, preferredQuality) ?: formats.firstOrNull() ?: return null
+
+            // FAST PATH: Use direct URL without heavy JS deobfuscation
+            val streamUrl = if (!candidate.url.isNullOrBlank()) {
+                candidate.url
+            } else {
+                // CIPHER PATH: Only if format requires signature decipher
+                withTimeoutOrNull(2500L) {
+                    NewPipeUtils.getStreamUrl(candidate, videoId, client).getOrNull()
+                } ?: candidate.url
+            }
+
+            if (!streamUrl.isNullOrBlank()) {
+                val isOpus = candidate.mimeType.contains("audio/webm", ignoreCase = true) ||
+                        candidate.mimeType.contains("opus", ignoreCase = true) ||
+                        candidate.itag == 251 || candidate.itag == 250 || candidate.itag == 249
+
+                val formatLabel = formatAudioQualityLabel(candidate.mimeType, candidate.itag, candidate.bitrate)
+
+                ResolvedAudioStream(
+                    url = streamUrl,
+                    itag = candidate.itag,
+                    mimeType = candidate.mimeType,
+                    bitrate = candidate.bitrate,
+                    isOpus = isOpus,
+                    durationMs = songDurationMs,
+                    clientName = client.clientName,
+                    formatLabel = formatLabel
+                )
+            } else null
+        } catch (_: Exception) {
+            null
+        }
     }
 
     fun formatAudioQualityLabel(mimeType: String?, itag: Int?, bitrate: Int?): String {

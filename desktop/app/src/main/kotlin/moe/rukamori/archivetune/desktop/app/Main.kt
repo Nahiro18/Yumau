@@ -11,6 +11,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
+import androidx.compose.material.icons.automirrored.filled.VolumeDown
+import androidx.compose.material.icons.automirrored.filled.VolumeMute
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material3.*
@@ -117,6 +120,11 @@ fun main() {
                 proxyProvider = { moe.rukamori.archivetune.innertube.YouTube.streamProxy }
             )
         )
+    }
+
+    // Warm up YouTube session credentials in background for instant stream resolution
+    CoroutineScope(Dispatchers.IO).launch {
+        runCatching { YouTube.visitorData() }
     }
 
     val player = DesktopPlayer()
@@ -740,6 +748,17 @@ fun LibraryScreen(player: DesktopPlayer, onNavigateToSettings: () -> Unit) {
                                         SpotifyTrackRow(
                                             track = track,
                                             onPlay = {
+                                                player.setPreparing(
+                                                    DesktopMediaItem(
+                                                        id = track.id,
+                                                        title = track.name,
+                                                        artist = track.artists.joinToString(", ") { it.name },
+                                                        uri = "",
+                                                        durationMs = track.durationMs.toLong(),
+                                                        thumbnailUrl = track.album?.images?.firstOrNull()?.url,
+                                                        audioFormat = "Buscando en YouTube..."
+                                                    )
+                                                )
                                                 scope.launch {
                                                     val ytSong = DesktopSpotifyStore.matchSpotifyTrackToYouTube(track)
                                                     if (ytSong != null) {
@@ -783,6 +802,17 @@ fun LibraryScreen(player: DesktopPlayer, onNavigateToSettings: () -> Unit) {
                                         SpotifyTrackRow(
                                             track = saved.track,
                                             onPlay = {
+                                                player.setPreparing(
+                                                    DesktopMediaItem(
+                                                        id = saved.track.id,
+                                                        title = saved.track.name,
+                                                        artist = saved.track.artists.joinToString(", ") { it.name },
+                                                        uri = "",
+                                                        durationMs = saved.track.durationMs.toLong(),
+                                                        thumbnailUrl = saved.track.album?.images?.firstOrNull()?.url,
+                                                        audioFormat = "Buscando en YouTube..."
+                                                    )
+                                                )
                                                 scope.launch {
                                                     val ytSong = DesktopSpotifyStore.matchSpotifyTrackToYouTube(saved.track)
                                                     if (ytSong != null) {
@@ -1043,7 +1073,7 @@ fun QueueScreen(player: DesktopPlayer, onBack: () -> Unit) {
                                 Text(item.artist, color = Color.Gray, fontSize = 12.sp)
                             }
                             if (isPlaying) {
-                                Icon(Icons.Default.VolumeUp, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                                Icon(Icons.AutoMirrored.Filled.VolumeUp, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                             }
                         }
                     }
@@ -1379,7 +1409,7 @@ fun PlayerBar(
                         }
 
                         IconButton(onClick = {
-                            player.seekTo((position - settings.seekDurationSeconds * 1000L).coerceAtLeast(0L))
+                            player.seekRelative(-settings.seekDurationSeconds.toDouble())
                         }) {
                             Icon(Icons.Default.FastRewind, contentDescription = "-${settings.seekDurationSeconds}s", tint = Color.LightGray)
                         }
@@ -1404,8 +1434,7 @@ fun PlayerBar(
                         }
 
                         IconButton(onClick = {
-                            val maxDur = if (duration > 0) duration else Long.MAX_VALUE
-                            player.seekTo((position + settings.seekDurationSeconds * 1000L).coerceAtMost(maxDur))
+                            player.seekRelative(settings.seekDurationSeconds.toDouble())
                         }) {
                             Icon(Icons.Default.FastForward, contentDescription = "+${settings.seekDurationSeconds}s", tint = Color.LightGray)
                         }
@@ -1472,7 +1501,27 @@ fun PlayerBar(
                         Icon(Icons.AutoMirrored.Filled.QueueMusic, contentDescription = "Cola", tint = Color.Gray)
                     }
 
-                    Icon(Icons.Default.VolumeUp, contentDescription = null, tint = Color.Gray, modifier = Modifier.size(20.dp))
+                    var lastNonZeroVolume by remember { mutableStateOf(80) }
+
+                    IconButton(onClick = {
+                        if (volume > 0) {
+                            lastNonZeroVolume = volume
+                            player.setVolume(0)
+                        } else {
+                            player.setVolume(if (lastNonZeroVolume > 0) lastNonZeroVolume else 80)
+                        }
+                    }) {
+                        Icon(
+                            imageVector = when {
+                                volume == 0 -> Icons.AutoMirrored.Filled.VolumeMute
+                                volume <= 50 -> Icons.AutoMirrored.Filled.VolumeDown
+                                else -> Icons.AutoMirrored.Filled.VolumeUp
+                            },
+                            contentDescription = if (volume == 0) "Activar sonido" else "Silenciar",
+                            tint = if (volume == 0) Color.Red else Color.LightGray,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
                     Spacer(Modifier.width(6.dp))
                     Slider(
                         value = volume / 100f,

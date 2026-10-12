@@ -145,6 +145,15 @@ class MpvProcess(
     private val JsonPrimitive.contentOrNullSafe: String?
         get() = runCatching { content }.getOrNull()
 
+    private fun Any?.toJsonPrimitive(): JsonPrimitive = when (this) {
+        null -> JsonPrimitive("")
+        is Boolean -> JsonPrimitive(this)
+        is Number -> JsonPrimitive(this)
+        is String -> JsonPrimitive(this)
+        is JsonPrimitive -> this
+        else -> JsonPrimitive(this.toString())
+    }
+
     /** Send an mpv command and wait for its reply. Returns the "data"/"error" element. */
     fun command(args: List<Any>, timeoutMs: Long = 10_000): JsonElement {
         val out = writer ?: error("Not connected to mpv")
@@ -157,7 +166,7 @@ class MpvProcess(
         }
         val payload =
             buildJsonObject {
-                put("command", JsonArray(args.map { a -> JsonPrimitive(a.toString()) }))
+                put("command", JsonArray(args.map { it.toJsonPrimitive() }))
                 put("request_id", id)
                 put("async", true)
             }
@@ -175,7 +184,7 @@ class MpvProcess(
         val out = writer ?: return
         val payload =
             buildJsonObject {
-                put("command", JsonArray(args.map { a -> JsonPrimitive(a.toString()) }))
+                put("command", JsonArray(args.map { it.toJsonPrimitive() }))
                 put("async", true)
             }
         synchronized(out) {

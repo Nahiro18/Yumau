@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.booleanOrNull
 import java.io.File
 
 data class DesktopMediaItem(
@@ -99,6 +100,22 @@ class DesktopPlayer(
                 _state.value == DesktopPlayerState.PLAYING
             ) {
                 onTrackFinished()
+            }
+        }
+        mpv.observeProperty("pause") { el ->
+            val isPaused = (el as? kotlinx.serialization.json.JsonPrimitive)?.booleanOrNull
+            if (isPaused != null) {
+                if (isPaused && _state.value == DesktopPlayerState.PLAYING) {
+                    _state.value = DesktopPlayerState.PAUSED
+                } else if (!isPaused && _state.value == DesktopPlayerState.PAUSED) {
+                    _state.value = DesktopPlayerState.PLAYING
+                }
+            }
+        }
+        mpv.observeProperty("volume") { el ->
+            val v = (el as? kotlinx.serialization.json.JsonPrimitive)?.content?.toDoubleOrNull()
+            if (v != null && v >= 0) {
+                _volume.value = v.toInt().coerceIn(0, 100)
             }
         }
         mpv.observeProperty("audio-codec-name") { el ->
@@ -270,13 +287,21 @@ class DesktopPlayer(
     fun prev() {
         val size = _queue.value.size
         if (size == 0) return
-        playIndex((_currentIndex.value - 1 + size) % size)
+        if (_positionMs.value > 3000L) {
+            seekTo(0L)
+        } else {
+            playIndex((_currentIndex.value - 1 + size) % size)
+        }
     }
 
     fun seekTo(ms: Long) {
         _positionMs.value = ms
         val seconds = (ms / 1000.0).coerceAtLeast(0.0)
         mpv.commandAsync(listOf("seek", seconds, "absolute"))
+    }
+
+    fun seekRelative(seconds: Double) {
+        mpv.commandAsync(listOf("seek", seconds, "relative"))
     }
 
     fun setVolume(percent: Int) {
