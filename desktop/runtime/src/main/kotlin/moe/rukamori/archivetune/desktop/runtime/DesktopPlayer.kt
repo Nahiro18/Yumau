@@ -198,6 +198,8 @@ class DesktopPlayer(
         }
     }
 
+    private var playJob: kotlinx.coroutines.Job? = null
+
     fun playIndex(index: Int) {
         val items = _queue.value
         if (index < 0 || index >= items.size) return
@@ -208,7 +210,8 @@ class DesktopPlayer(
         if (item.durationMs > 0) {
             _durationMs.value = item.durationMs
         }
-        scope.launch {
+        playJob?.cancel()
+        playJob = scope.launch {
             val resolvedItem = if (item.uri.isBlank()) {
                 itemResolver?.invoke(item) ?: item
             } else {

@@ -264,9 +264,17 @@ object DesktopSpotifyStore {
         refreshHomeFeed()
     }
 
-    suspend fun refreshHomeFeed() = withContext(Dispatchers.IO) {
+    private var lastHomeFetchTime: Long = 0L
+
+    suspend fun refreshHomeFeed(force: Boolean = false) = withContext(Dispatchers.IO) {
         if (!_session.value.isLoggedIn) return@withContext
+        if (_isHomeLoading.value) return@withContext
+        val now = System.currentTimeMillis()
+        if (!force && now - lastHomeFetchTime < 60_000L && _recentlyPlayed.value.isNotEmpty()) {
+            return@withContext
+        }
         _isHomeLoading.value = true
+        lastHomeFetchTime = now
         try {
             val recentDeferred = async { runCatching { Spotify.recentlyPlayed(limit = 20).getOrNull() } }
             val topTracksDeferred = async { runCatching { Spotify.topTracks(limit = 25).getOrNull() } }
@@ -274,19 +282,19 @@ object DesktopSpotifyStore {
             val newReleasesDeferred = async { runCatching { Spotify.newReleases(limit = 20).getOrNull() } }
 
             recentDeferred.await().getOrNull()?.let { res ->
-                val tracks = res?.items?.map { it.track }?.distinctBy { it.id }.orEmpty()
+                val tracks = res.items.map { it.track }.distinctBy { it.id }
                 if (tracks.isNotEmpty()) _recentlyPlayed.value = tracks
             }
             topTracksDeferred.await().getOrNull()?.let { res ->
-                val tracks = res?.items.orEmpty()
+                val tracks = res.items
                 if (tracks.isNotEmpty()) _topTracks.value = tracks
             }
             topArtistsDeferred.await().getOrNull()?.let { res ->
-                val artists = res?.items.orEmpty()
+                val artists = res.items
                 if (artists.isNotEmpty()) _topArtists.value = artists
             }
             newReleasesDeferred.await().getOrNull()?.let { res ->
-                val albums = res?.albums?.items.orEmpty()
+                val albums = res.albums?.items.orEmpty()
                 if (albums.isNotEmpty()) _newReleases.value = albums
             }
         } finally {
@@ -298,7 +306,14 @@ object DesktopSpotifyStore {
         Spotify.playlistTracks(playlistId, limit = 100).getOrNull()?.items.orEmpty()
     }
 
-    private val matchCache = java.util.concurrent.ConcurrentHashMap<String, SongItem>()
+    private const val MAX_MATCH_CACHE = 250
+    private val matchCache = java.util.Collections.synchronizedMap(
+        object : java.util.LinkedHashMap<String, SongItem>(MAX_MATCH_CACHE, 0.75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, SongItem>?): Boolean {
+                return size > MAX_MATCH_CACHE
+            }
+        }
+    )
 
     suspend fun matchSpotifyTrackToYouTube(track: SpotifyTrack): SongItem? = withContext(Dispatchers.IO) {
         val cacheKey = track.id.ifBlank { "${track.name}_${track.artists.firstOrNull()?.name}" }

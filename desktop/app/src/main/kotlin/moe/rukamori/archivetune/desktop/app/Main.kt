@@ -62,6 +62,9 @@ private fun formatTime(ms: Long): String {
     return "%d:%02d".format(total / 60, total % 60)
 }
 
+private var activePlayTrackJob: kotlinx.coroutines.Job? = null
+private var activeRadioJob: kotlinx.coroutines.Job? = null
+
 fun playTrack(
     scope: CoroutineScope,
     player: DesktopPlayer,
@@ -85,7 +88,10 @@ fun playTrack(
         )
     )
 
-    scope.launch {
+    activeRadioJob?.cancel()
+    activePlayTrackJob?.cancel()
+
+    activePlayTrackJob = scope.launch {
         DesktopLibraryStore.recordHistory(
             StoredSong(
                 id = songId,
@@ -119,7 +125,7 @@ fun playTrack(
         player.setQueue(listOf(media), startIndex = 0)
 
         // Auto-cola inteligente (Radio algorithm) - Llena la cola con ~25 canciones recomendadas
-        scope.launch(Dispatchers.IO) {
+        activeRadioJob = scope.launch(Dispatchers.IO) {
             runCatching {
                 val nextResult = YouTube.next(WatchEndpoint(videoId = songId)).getOrNull()
                 val recommended = nextResult?.items

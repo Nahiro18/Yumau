@@ -52,6 +52,9 @@ private fun getGreeting(): String {
     }
 }
 
+private var cachedTrendingSongs: List<SongItem> = emptyList()
+private var lastTrendingFetchTime: Long = 0L
+
 @Composable
 fun DesktopHomeScreen(
     onPlayTrack: (songId: String, title: String, artist: String, durationSeconds: Int?, thumbnailUrl: String?) -> Unit,
@@ -66,28 +69,44 @@ fun DesktopHomeScreen(
     val isHomeLoading by DesktopSpotifyStore.isHomeLoading.collectAsState()
 
     var selectedSource by remember { mutableStateOf(if (session.isLoggedIn) 0 else 1) } // 0: Spotify, 1: YouTube
-    var ytTrendingSongs by remember { mutableStateOf<List<SongItem>>(emptyList()) }
-    var isYtLoading by remember { mutableStateOf(false) }
+    var ytTrendingSongs by remember { mutableStateOf(cachedTrendingSongs) }
+    var isYtLoading by remember { mutableStateOf(cachedTrendingSongs.isEmpty()) }
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(Unit) {
         if (session.isLoggedIn) {
             DesktopSpotifyStore.refreshHomeFeed()
         }
+        val now = System.currentTimeMillis()
+        if (cachedTrendingSongs.isNotEmpty() && now - lastTrendingFetchTime < 10 * 60 * 1000L) {
+            ytTrendingSongs = cachedTrendingSongs
+            isYtLoading = false
+            return@LaunchedEffect
+        }
         isYtLoading = true
         withContext(Dispatchers.IO) {
             try {
                 val chartResult = YouTube.getChartsPage().getOrNull()
                 val songs = chartResult?.sections?.flatMap { it.items }?.filterIsInstance<SongItem>() ?: emptyList()
-                ytTrendingSongs = if (songs.isNotEmpty()) {
+                val fetched = if (songs.isNotEmpty()) {
                     songs
                 } else {
                     YouTube.search("Top Hits 2026", filter = SearchFilter.FILTER_SONG).getOrNull()
                         ?.items?.filterIsInstance<SongItem>() ?: emptyList()
                 }
+                cachedTrendingSongs = fetched
+                lastTrendingFetchTime = System.currentTimeMillis()
+                ytTrendingSongs = fetched
             } catch (_: Exception) {
-                ytTrendingSongs = YouTube.search("Top Music", filter = SearchFilter.FILTER_SONG).getOrNull()
-                    ?.items?.filterIsInstance<SongItem>() ?: emptyList()
+                if (cachedTrendingSongs.isNotEmpty()) {
+                    ytTrendingSongs = cachedTrendingSongs
+                } else {
+                    val fallback = YouTube.search("Top Music", filter = SearchFilter.FILTER_SONG).getOrNull()
+                        ?.items?.filterIsInstance<SongItem>() ?: emptyList()
+                    cachedTrendingSongs = fallback
+                    lastTrendingFetchTime = System.currentTimeMillis()
+                    ytTrendingSongs = fallback
+                }
             } finally {
                 isYtLoading = false
             }
@@ -151,7 +170,7 @@ fun DesktopHomeScreen(
                         }
                         Spacer(Modifier.width(10.dp))
                         IconButton(
-                            onClick = { scope.launch { DesktopSpotifyStore.refreshHomeFeed() } },
+                            onClick = { scope.launch { DesktopSpotifyStore.refreshHomeFeed(force = true) } },
                             modifier = Modifier.size(38.dp)
                         ) {
                             Icon(Icons.Default.Refresh, contentDescription = "Recargar", tint = Color.LightGray)
