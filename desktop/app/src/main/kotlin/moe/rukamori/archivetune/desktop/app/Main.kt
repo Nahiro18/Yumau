@@ -1042,7 +1042,10 @@ fun LyricsScreen(
                 Icon(Icons.Default.ArrowBack, contentDescription = "Volver", tint = Color.White)
             }
             Spacer(Modifier.width(8.dp))
-            Text("Letras de la Canción", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = Color.White)
+            Column {
+                Text("Karaoke y Letras", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                Text("Sincronizado en vivo • toca una línea para saltar", fontSize = 12.sp, color = Color(0xFF9CA3AF))
+            }
         }
         Spacer(Modifier.height(16.dp))
 
@@ -1051,33 +1054,56 @@ fun LyricsScreen(
                 CircularProgressIndicator()
             }
         } else if (lyrics.isNotEmpty()) {
+            // Vista karaoke: linea activa grande y resaltada, resto atenuado,
+            // centrado y con auto-scroll (estilo Android).
             LazyColumn(
                 state = listState,
                 modifier = Modifier.fillMaxSize(),
-                horizontalAlignment = Alignment.CenterHorizontally
+                horizontalAlignment = Alignment.CenterHorizontally,
+                contentPadding = PaddingValues(vertical = 40.dp)
             ) {
                 itemsIndexed(lyrics) { idx, line ->
                     val isCurrent = idx == currentLineIndex
-                    val itemFontSize = if (isCurrent) settings.lyricsTextSize.sp else (settings.lyricsTextSize * 0.78f).sp
+                    val itemFontSize = if (isCurrent) (settings.lyricsTextSize * 1.25f).sp else (settings.lyricsTextSize * 0.78f).sp
                     val itemColor = when {
                         isCurrent -> Color(0xFFA78BFA)
                         settings.lyricsLineBlur -> Color.White.copy(alpha = 0.35f)
                         else -> Color(0xFF9CA3AF)
                     }
 
-                    Text(
-                        line.text,
-                        fontSize = itemFontSize,
-                        fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
-                        color = itemColor,
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
                         modifier = Modifier
+                            .fillMaxWidth()
                             .padding(vertical = (8 * settings.lyricsLineSpacing).dp)
                             .then(
                                 if (settings.lyricsClick) {
-                                    Modifier.clickable { player.seekTo(line.timestampMs) }
+                                    Modifier
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .clickable { player.seekTo(line.timestampMs) }
                                 } else Modifier
                             )
-                    )
+                            .padding(horizontal = 20.dp, vertical = 2.dp)
+                    ) {
+                        Text(
+                            line.text,
+                            fontSize = itemFontSize,
+                            fontWeight = if (isCurrent) FontWeight.ExtraBold else FontWeight.Normal,
+                            color = itemColor,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        if (isCurrent) {
+                            Spacer(Modifier.height(4.dp))
+                            Box(
+                                Modifier
+                                    .width(46.dp)
+                                    .height(3.dp)
+                                    .clip(RoundedCornerShape(2.dp))
+                                    .background(Color(0xFFA78BFA))
+                            )
+                        }
+                    }
                 }
             }
         } else if (!plainLyrics.isNullOrBlank()) {
@@ -1394,9 +1420,9 @@ fun PlayerBar(
     onOpenLyrics: () -> Unit,
     onOpenQueue: () -> Unit
 ) {
-    // Mini-player estilo Android: tarjeta flotante compacta con caratula, titulo,
-    // favorito, play/pausa, siguiente y barra de progreso fina.
-    // Todos los controles avanzados viven en el FullPlayer expandido (sin borrar nada).
+    // Mini-player estilo Android: tarjeta flotante con caratula, titulo, botones
+    // circulares grandes (Letras/Karaoke, Favorito, Anterior, Play, Siguiente, Cola)
+    // y barra de progreso. Todos los controles se conservan y se agrandan.
     val state by player.state.collectAsState()
     val position by player.positionMs.collectAsState()
     val duration by player.durationMs.collectAsState()
@@ -1414,109 +1440,200 @@ fun PlayerBar(
     Box(Modifier.fillMaxWidth().background(Color.Transparent).padding(horizontal = 12.dp, vertical = 8.dp)) {
         Card(
             modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(16.dp),
+            shape = RoundedCornerShape(18.dp),
             colors = CardDefaults.cardColors(containerColor = Color(0xFF1B1E29)),
             border = BorderStroke(1.dp, Color(0x22FFFFFF)),
             elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
         ) {
             Column(Modifier.fillMaxWidth()) {
                 Row(
-                    Modifier.fillMaxWidth().clickable { if (current != null) onExpandFullPlayer() }
-                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                    Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    if (thumbBitmap != null) {
-                        Image(
-                            bitmap = thumbBitmap,
-                            contentDescription = null,
-                            modifier = Modifier.size(52.dp).clip(RoundedCornerShape(10.dp)),
-                            contentScale = ContentScale.Crop
-                        )
-                    } else {
-                        Box(
-                            modifier = Modifier.size(52.dp).clip(RoundedCornerShape(10.dp)).background(Color(0xFF282B35)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(Icons.Default.MusicNote, contentDescription = null, tint = Color.Gray)
+                    // Caratula + metadatos: click expande el FullPlayer (como Android)
+                    Row(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(12.dp))
+                            .clickable { if (current != null) onExpandFullPlayer() }
+                            .padding(2.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        if (thumbBitmap != null) {
+                            Image(
+                                bitmap = thumbBitmap,
+                                contentDescription = null,
+                                modifier = Modifier.size(58.dp).clip(RoundedCornerShape(12.dp)),
+                                contentScale = ContentScale.Crop
+                            )
+                        } else {
+                            Box(
+                                modifier = Modifier.size(58.dp).clip(RoundedCornerShape(12.dp)).background(Color(0xFF282B35)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(Icons.Default.MusicNote, contentDescription = null, tint = Color.Gray, modifier = Modifier.size(28.dp))
+                            }
+                        }
+
+                        Spacer(Modifier.width(14.dp))
+
+                        Column(Modifier.weight(1f)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    current?.title ?: if (state == DesktopPlayerState.IDLE) "Listo para reproducir" else "Cargando...",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 15.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    color = Color.White,
+                                    modifier = Modifier.weight(1f, fill = false)
+                                )
+                                val badge = currentFormat ?: current?.audioFormat
+                                if (!badge.isNullOrBlank() && current != null) {
+                                    Spacer(Modifier.width(6.dp))
+                                    Surface(color = Color(0xFF2D224C), shape = RoundedCornerShape(4.dp)) {
+                                        Text(
+                                            badge, fontSize = 9.sp, fontWeight = FontWeight.Bold,
+                                            color = Color(0xFFA78BFA),
+                                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                }
+                            }
+                            Text(
+                                current?.artist ?: "YumaPlayer • Toca para expandir",
+                                color = Color(0xFF9CA3AF), fontSize = 12.sp,
+                                maxLines = 1, overflow = TextOverflow.Ellipsis
+                            )
                         }
                     }
 
-                    Spacer(Modifier.width(12.dp))
+                    Spacer(Modifier.width(10.dp))
 
-                    Column(Modifier.weight(1f)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                current?.title ?: if (state == DesktopPlayerState.IDLE) "Listo para reproducir" else "Cargando...",
-                                fontWeight = FontWeight.SemiBold,
-                                fontSize = 14.sp,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                color = Color.White,
-                                modifier = Modifier.weight(1f, fill = false)
-                            )
-                            val badge = currentFormat ?: current?.audioFormat
-                            if (!badge.isNullOrBlank() && current != null) {
-                                Spacer(Modifier.width(6.dp))
-                                Surface(color = Color(0xFF2D224C), shape = RoundedCornerShape(4.dp)) {
-                                    Text(
-                                        badge, fontSize = 9.sp, fontWeight = FontWeight.Bold,
-                                        color = Color(0xFFA78BFA),
-                                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                    // Boton Letras/Karaoke (grande, estilo Android)
+                    AndroidCircleButton(
+                        icon = Icons.Default.Mic,
+                        contentDescription = "Letras y Karaoke",
+                        size = 46.dp,
+                        iconSize = 24.dp,
+                        onClick = onOpenLyrics
+                    )
+
+                    // Boton Favorito
+                    if (current != null) {
+                        Spacer(Modifier.width(6.dp))
+                        AndroidCircleButton(
+                            icon = if (isFav) Icons.Default.Favorite else Icons.Outlined.FavoriteBorder,
+                            contentDescription = "Me gusta",
+                            size = 46.dp,
+                            iconSize = 22.dp,
+                            tint = if (isFav) Color(0xFFEF4444) else Color.White,
+                            onClick = {
+                                scope.launch {
+                                    DesktopLibraryStore.toggleFavorite(
+                                        StoredSong(
+                                            id = current.id, title = current.title, artist = current.artist,
+                                            durationMs = current.durationMs, thumbnailUrl = current.thumbnailUrl
+                                        )
                                     )
                                 }
                             }
-                        }
-                        Text(
-                            current?.artist ?: "YumaPlayer • Toca para expandir",
-                            color = Color(0xFF9CA3AF), fontSize = 12.sp,
-                            maxLines = 1, overflow = TextOverflow.Ellipsis
                         )
                     }
 
-                    if (current != null) {
-                        IconButton(onClick = {
-                            scope.launch {
-                                DesktopLibraryStore.toggleFavorite(
-                                    StoredSong(
-                                        id = current.id, title = current.title, artist = current.artist,
-                                        durationMs = current.durationMs, thumbnailUrl = current.thumbnailUrl
-                                    )
-                                )
-                            }
-                        }) {
-                            Icon(
-                                if (isFav) Icons.Default.Favorite else Icons.Outlined.FavoriteBorder,
-                                contentDescription = "Me gusta",
-                                tint = if (isFav) Color(0xFFEF4444) else Color.Gray,
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
-                    }
-                    IconButton(
-                        onClick = { player.playPause() },
-                        modifier = Modifier.size(44.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary)
+                    // Boton Anterior
+                    Spacer(Modifier.width(6.dp))
+                    AndroidCircleButton(
+                        icon = Icons.Default.SkipPrevious,
+                        contentDescription = "Anterior",
+                        size = 48.dp,
+                        iconSize = 28.dp,
+                        onClick = { player.prev() }
+                    )
+
+                    // Play/Pausa: circulo principal grande (estilo Android)
+                    Spacer(Modifier.width(8.dp))
+                    Box(
+                        modifier = Modifier
+                            .size(60.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.primary)
+                            .clickable { player.playPause() },
+                        contentAlignment = Alignment.Center
                     ) {
                         Icon(
                             if (state == DesktopPlayerState.PLAYING) Icons.Default.Pause else Icons.Default.PlayArrow,
-                            contentDescription = "Play/Pausa", tint = Color.White
+                            contentDescription = "Play/Pausa", tint = Color.White,
+                            modifier = Modifier.size(34.dp)
                         )
                     }
-                    IconButton(onClick = { player.next() }) {
-                        Icon(Icons.Default.SkipNext, contentDescription = "Siguiente", tint = Color.White)
-                    }
-                    IconButton(onClick = onToggleSidePanel) {
-                        Icon(Icons.Default.ExpandLess, contentDescription = "Panel lateral", tint = Color.Gray, modifier = Modifier.size(20.dp))
-                    }
+
+                    // Boton Siguiente
+                    Spacer(Modifier.width(8.dp))
+                    AndroidCircleButton(
+                        icon = Icons.Default.SkipNext,
+                        contentDescription = "Siguiente",
+                        size = 48.dp,
+                        iconSize = 28.dp,
+                        onClick = { player.next() }
+                    )
+
+                    // Boton Cola
+                    Spacer(Modifier.width(6.dp))
+                    AndroidCircleButton(
+                        icon = Icons.AutoMirrored.Filled.QueueMusic,
+                        contentDescription = "Cola de reproducción",
+                        size = 46.dp,
+                        iconSize = 24.dp,
+                        onClick = onOpenQueue
+                    )
+
+                    // Panel lateral (letras + info en vivo)
+                    Spacer(Modifier.width(6.dp))
+                    AndroidCircleButton(
+                        icon = Icons.Default.ExpandLess,
+                        contentDescription = "Panel lateral",
+                        size = 40.dp,
+                        iconSize = 20.dp,
+                        tint = Color.Gray,
+                        onClick = onToggleSidePanel
+                    )
                 }
-                // Progreso fino estilo Android (mini-player)
+                // Progreso estilo Android (mini-player)
                 LinearProgressIndicator(
                     progress = { progress },
-                    modifier = Modifier.fillMaxWidth().height(2.dp),
+                    modifier = Modifier.fillMaxWidth().height(3.dp),
                     color = MaterialTheme.colorScheme.primary,
                     trackColor = Color(0xFF374151),
                 )
             }
         }
+    }
+}
+
+/**
+ * Boton circular estilo Android (fondo translucido + borde sutil), reutilizable
+ * en mini-player y FullPlayer. Touch target amplio para uso comodo.
+ */
+@Composable
+fun AndroidCircleButton(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    contentDescription: String,
+    size: androidx.compose.ui.unit.Dp,
+    iconSize: androidx.compose.ui.unit.Dp,
+    tint: Color = Color.White,
+    onClick: () -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .size(size)
+            .clip(CircleShape)
+            .background(Color.White.copy(alpha = 0.08f))
+            .border(1.dp, Color.White.copy(alpha = 0.15f), CircleShape)
+            .clickable { onClick() },
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(icon, contentDescription = contentDescription, tint = tint, modifier = Modifier.size(iconSize))
     }
 }
 
@@ -1656,70 +1773,109 @@ fun AndroidFullPlayerOverlay(
                     )
                     Text(formatTime(duration), fontSize = 12.sp, color = Color.Gray, modifier = Modifier.width(44.dp))
                 }
-                // Controles principales (todos preservados)
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
-                    IconButton(onClick = { player.toggleShuffle() }) {
-                        Icon(Icons.Default.Shuffle, contentDescription = "Aleatorio",
-                            tint = if (shuffleEnabled) MaterialTheme.colorScheme.primary else Color.Gray, modifier = Modifier.size(22.dp))
-                    }
-                    IconButton(onClick = { player.prev() }) {
-                        Icon(Icons.Default.SkipPrevious, contentDescription = "Anterior", tint = Color.White, modifier = Modifier.size(36.dp))
-                    }
-                    Spacer(Modifier.width(8.dp))
-                    IconButton(
-                        onClick = { player.playPause() },
-                        modifier = Modifier.size(64.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary)
+                // Controles principales estilo Android: circulos grandes con fondo sutil
+                Row(
+                    Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center
+                ) {
+                    AndroidCircleButton(
+                        icon = Icons.Default.Shuffle, contentDescription = "Aleatorio",
+                        size = 52.dp, iconSize = 26.dp,
+                        tint = if (shuffleEnabled) MaterialTheme.colorScheme.primary else Color.White,
+                        onClick = { player.toggleShuffle() }
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    AndroidCircleButton(
+                        icon = Icons.Default.SkipPrevious, contentDescription = "Anterior",
+                        size = 56.dp, iconSize = 34.dp,
+                        onClick = { player.prev() }
+                    )
+                    Spacer(Modifier.width(14.dp))
+                    // Play/Pausa: circulo principal (72dp, como Android FullPlayer)
+                    Box(
+                        modifier = Modifier
+                            .size(76.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.primary)
+                            .clickable { player.playPause() },
+                        contentAlignment = Alignment.Center
                     ) {
-                        Icon(if (state == DesktopPlayerState.PLAYING) Icons.Default.Pause else Icons.Default.PlayArrow,
-                            contentDescription = "Play/Pausa", tint = Color.White, modifier = Modifier.size(32.dp))
-                    }
-                    Spacer(Modifier.width(8.dp))
-                    IconButton(onClick = { player.next() }) {
-                        Icon(Icons.Default.SkipNext, contentDescription = "Siguiente", tint = Color.White, modifier = Modifier.size(36.dp))
-                    }
-                    IconButton(onClick = { player.cycleRepeatMode() }) {
                         Icon(
-                            when (repeatMode) { 2 -> Icons.Default.RepeatOne; 1 -> Icons.Default.Repeat; else -> Icons.Default.Repeat },
-                            contentDescription = "Repetir",
-                            tint = if (repeatMode > 0) MaterialTheme.colorScheme.primary else Color.Gray, modifier = Modifier.size(22.dp))
-                    }
-                }
-                Spacer(Modifier.height(4.dp))
-                // Fila secundaria: rewind, letras, ff + volumen/mute (nada eliminado, solo reubicado)
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-                    IconButton(onClick = { player.seekRelative(-settings.seekDurationSeconds.toDouble()) }) {
-                        Icon(Icons.Default.FastRewind, contentDescription = "-${settings.seekDurationSeconds}s", tint = Color.LightGray)
-                    }
-                    IconButton(onClick = onOpenLyrics) {
-                        Icon(Icons.Default.Mic, contentDescription = "Letras", tint = Color.Gray)
-                    }
-                    IconButton(onClick = { player.seekRelative(settings.seekDurationSeconds.toDouble()) }) {
-                        Icon(Icons.Default.FastForward, contentDescription = "+${settings.seekDurationSeconds}s", tint = Color.LightGray)
-                    }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        IconButton(onClick = {
-                            if (volume > 0) { lastNonZeroVolume = volume; player.setVolume(0) }
-                            else player.setVolume(if (lastNonZeroVolume > 0) lastNonZeroVolume else 80)
-                        }) {
-                            Icon(
-                                imageVector = when {
-                                    volume == 0 -> Icons.AutoMirrored.Filled.VolumeMute
-                                    volume <= 50 -> Icons.AutoMirrored.Filled.VolumeDown
-                                    else -> Icons.AutoMirrored.Filled.VolumeUp
-                                },
-                                contentDescription = "Volumen",
-                                tint = if (volume == 0) Color.Red else Color.LightGray, modifier = Modifier.size(20.dp)
-                            )
-                        }
-                        Slider(
-                            value = volume / 100f,
-                            onValueChange = { player.setVolume((it * 100).toInt()) },
-                            modifier = Modifier.width(90.dp),
-                            colors = SliderDefaults.colors(
-                                thumbColor = Color.White, activeTrackColor = Color(0xFFA78BFA),
-                                inactiveTrackColor = Color(0xFF374151))
+                            if (state == DesktopPlayerState.PLAYING) Icons.Default.Pause else Icons.Default.PlayArrow,
+                            contentDescription = "Play/Pausa", tint = Color.White, modifier = Modifier.size(42.dp)
                         )
                     }
+                    Spacer(Modifier.width(14.dp))
+                    AndroidCircleButton(
+                        icon = Icons.Default.SkipNext, contentDescription = "Siguiente",
+                        size = 56.dp, iconSize = 34.dp,
+                        onClick = { player.next() }
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    AndroidCircleButton(
+                        icon = when (repeatMode) { 2 -> Icons.Default.RepeatOne; 1 -> Icons.Default.Repeat; else -> Icons.Default.Repeat },
+                        contentDescription = "Repetir",
+                        size = 52.dp, iconSize = 26.dp,
+                        tint = if (repeatMode > 0) MaterialTheme.colorScheme.primary else Color.White,
+                        onClick = { player.cycleRepeatMode() }
+                    )
+                }
+                Spacer(Modifier.height(10.dp))
+                // Fila secundaria: rewind, KARAOKE (letras), ff + volumen/mute (todo preservado)
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    AndroidCircleButton(
+                        icon = Icons.Default.FastRewind, contentDescription = "-${settings.seekDurationSeconds}s",
+                        size = 48.dp, iconSize = 26.dp, tint = Color.LightGray,
+                        onClick = { player.seekRelative(-settings.seekDurationSeconds.toDouble()) }
+                    )
+                    // Boton de Karaoke/Letras destacado (con acento)
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(24.dp))
+                            .background(Color(0xFF2D224C))
+                            .border(1.dp, Color(0xFFA78BFA).copy(alpha = 0.5f), RoundedCornerShape(24.dp))
+                            .clickable { onOpenLyrics() }
+                            .padding(horizontal = 18.dp, vertical = 11.dp)
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Mic, contentDescription = "Karaoke y Letras", tint = Color(0xFFA78BFA), modifier = Modifier.size(24.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("Karaoke", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = Color(0xFFA78BFA))
+                        }
+                    }
+                    Spacer(Modifier.weight(1f))
+                    AndroidCircleButton(
+                        icon = Icons.Default.FastForward, contentDescription = "+${settings.seekDurationSeconds}s",
+                        size = 48.dp, iconSize = 26.dp, tint = Color.LightGray,
+                        onClick = { player.seekRelative(settings.seekDurationSeconds.toDouble()) }
+                    )
+                    AndroidCircleButton(
+                        icon = when {
+                            volume == 0 -> Icons.AutoMirrored.Filled.VolumeMute
+                            volume <= 50 -> Icons.AutoMirrored.Filled.VolumeDown
+                            else -> Icons.AutoMirrored.Filled.VolumeUp
+                        },
+                        contentDescription = "Volumen",
+                        size = 48.dp, iconSize = 24.dp,
+                        tint = if (volume == 0) Color.Red else Color.White,
+                        onClick = {
+                            if (volume > 0) { lastNonZeroVolume = volume; player.setVolume(0) }
+                            else player.setVolume(if (lastNonZeroVolume > 0) lastNonZeroVolume else 80)
+                        }
+                    )
+                    Slider(
+                        value = volume / 100f,
+                        onValueChange = { player.setVolume((it * 100).toInt()) },
+                        modifier = Modifier.width(110.dp),
+                        colors = SliderDefaults.colors(
+                            thumbColor = Color.White, activeTrackColor = Color(0xFFA78BFA),
+                            inactiveTrackColor = Color(0xFF374151))
+                    )
                 }
             }
         }
