@@ -56,6 +56,9 @@ class DesktopPlayer(
     private val _currentFormat = MutableStateFlow<String?>(null)
     val currentFormat: StateFlow<String?> = _currentFormat.asStateFlow()
 
+    private val _errorMessage = MutableStateFlow<String?>(null)
+    val errorMessage: StateFlow<String?> = _errorMessage.asStateFlow()
+
     private val _volume = MutableStateFlow(100)
     val volume: StateFlow<Int> = _volume.asStateFlow()
 
@@ -100,6 +103,27 @@ class DesktopPlayer(
                 _state.value == DesktopPlayerState.PLAYING
             ) {
                 onTrackFinished()
+            }
+        }
+        // Un error de carga (p.ej. URL googlevideo caducada => 403) NO debe colgar la app:
+        // invalidamos la cache de ese tema y limpiamos su uri para re-resolver la proxima vez.
+        mpv.observeEndFile { el ->
+            val reason = runCatching {
+                ((el as? kotlinx.serialization.json.JsonObject)
+                    ?.get("reason") as? kotlinx.serialization.json.JsonPrimitive)?.content
+            }.getOrNull()
+            if (reason == "error") {
+                val idx = _currentIndex.value
+                val item = _queue.value.getOrNull(idx)
+                if (item != null) {
+                    runCatching { onStreamError?.invoke(item) }
+                    val updated = _queue.value.toMutableList()
+                    if (idx in updated.indices && updated[idx].id == item.id) {
+                        updated[idx] = item.copy(uri = "")
+                        _queue.value = updated
+                    }
+                    _errorMessage.value = "No se pudo cargar el audio (URL caducada). Se reintentara."
+                }
             }
         }
         mpv.observeProperty("pause") { el ->
@@ -172,6 +196,20 @@ class DesktopPlayer(
     var autoSkipNextOnError: Boolean = true
     var itemResolver: (suspend (DesktopMediaItem) -> DesktopMediaItem?)? = null
 
+    /** Invocado cuando mpv reporta un error de carga (403 por URL caducada, etc.). */
+    var onStreamError: ((DesktopMediaItem) -> Unit)? = null
+
+    /** Muestra un error claro en la UI sin dejar la app colgada en "Cargando...". */
+    fun markError(message: String) {
+        _errorMessage.value = message
+        _state.value = DesktopPlayerState.ERROR
+        _currentFormat.value = null
+    }
+
+    fun clearError() {
+        _errorMessage.value = null
+    }
+
     fun setPreparing(item: DesktopMediaItem) {
         _queue.value = listOf(item)
         _currentIndex.value = 0
@@ -206,6 +244,7 @@ class DesktopPlayer(
         _currentIndex.value = index
         val item = items[index]
         _positionMs.value = 0L
+        _errorMessage.value = null
         _currentFormat.value = item.audioFormat ?: "Cargando audio..."
         if (item.durationMs > 0) {
             _durationMs.value = item.durationMs
@@ -216,11 +255,11 @@ class DesktopPlayer(
         playJob?.cancel()
         playJob = scope.launch {
             val resolvedItem = if (item.uri.isBlank()) {
-                itemResolver?.invoke(item) ?: item
+                itemResolver?.invoke(item)
             } else {
                 item
             }
-            if (resolvedItem.uri.isNotBlank()) {
+            if (resolvedItem != null && resolvedItem.uri.isNotBlank()) {
                 val currentList = _queue.value.toMutableList()
                 if (index < currentList.size) {
                     currentList[index] = resolvedItem
@@ -235,6 +274,7 @@ class DesktopPlayer(
                 mpv.commandAsync(listOf("loadfile", resolvedItem.uri, "replace"))
                 mpv.commandAsync(listOf("set_property", "pause", false))
                 _state.value = DesktopPlayerState.PLAYING
+                _errorMessage.value = null
 
                 // Prefetch agresivo: resuelve los siguientes 3 temas en paralelo
                 // para que "Siguiente" sea instantaneo (0ms, cache hit).
@@ -262,6 +302,8 @@ class DesktopPlayer(
                 }
             } else {
                 _state.value = DesktopPlayerState.ERROR
+                _errorMessage.value = "No se pudo obtener el audio de \"${item.title}\". Revisa la fuente en Ajustes."
+                _currentFormat.value = null
                 if (autoSkipNextOnError && items.size > 1) {
                     delay(500)
                     next()

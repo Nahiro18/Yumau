@@ -108,16 +108,28 @@ fun playTrack(
             }
         }
         val s = DesktopSettingsStore.settings.value
-        val stream = DesktopStreamResolver.resolveStreamUrl(
-            videoId = songId,
-            title = title,
-            artist = artist,
-            durationMs = initialDurationMs,
-            playbackSource = s.playbackSource,
-            flacQuality = s.flacQuality,
-            preferredQuality = s.audioQuality,
-            preferredClientName = s.streamingClient
-        )
+        // Tope duro: si la resolucion no termina en 10s, se muestra error claro
+        // en vez de dejar el mini-player en "Cargando..." eternamente.
+        val stream = withContext(Dispatchers.IO) {
+            kotlinx.coroutines.withTimeoutOrNull(10_000L) {
+                DesktopStreamResolver.resolveStreamUrl(
+                    videoId = songId,
+                    title = title,
+                    artist = artist,
+                    durationMs = initialDurationMs,
+                    playbackSource = s.playbackSource,
+                    flacQuality = s.flacQuality,
+                    preferredQuality = s.audioQuality,
+                    preferredClientName = s.streamingClient,
+                    flacFallbackToYoutube = s.flacFallbackToYoutube
+                )
+            }
+        }
+        if (stream == null) {
+            val fuente = if (s.playbackSource == "FLAC") "FLAC" else "YouTube Music"
+            player.markError("No disponible en $fuente: \"$title\". Revisa la fuente en Ajustes.")
+            return@launch
+        }
         val finalDurationMs = if (stream.durationMs > 0) stream.durationMs else initialDurationMs
         val media = DesktopMediaItem(
             id = songId,
@@ -163,7 +175,8 @@ fun playTrack(
                                         videoId = item.id, title = item.title, artist = item.artist,
                                         durationMs = item.durationMs, playbackSource = st.playbackSource,
                                         flacQuality = st.flacQuality, preferredQuality = st.audioQuality,
-                                        preferredClientName = st.streamingClient
+                                        preferredClientName = st.streamingClient,
+                                        flacFallbackToYoutube = st.flacFallbackToYoutube
                                     )
                                 }
                             }
@@ -211,6 +224,8 @@ fun playSpotifyTrack(
                 durationSeconds = ytSong.duration ?: (track.durationMs / 1000),
                 thumbnailUrl = track.album?.images?.firstOrNull()?.url ?: ytSong.thumbnail
             )
+        } else {
+            player.markError("No se encontro \"${track.name}\" en YouTube Music. Revisa Ajustes.")
         }
     }
 }
@@ -235,7 +250,8 @@ fun playQueue(
                             videoId = item.id, title = item.title, artist = item.artist,
                             durationMs = item.durationMs, playbackSource = s.playbackSource,
                             flacQuality = s.flacQuality, preferredQuality = s.audioQuality,
-                            preferredClientName = s.streamingClient
+                            preferredClientName = s.streamingClient,
+                            flacFallbackToYoutube = s.flacFallbackToYoutube
                         )
                     }
                 }
@@ -261,7 +277,7 @@ fun main() {
     }
 
     val player = DesktopPlayer()
-    player.itemResolver = { mediaItem ->
+    player.itemResolver = resolver@{ mediaItem ->
         val s = DesktopSettingsStore.settings.value
         var actualVideoId = mediaItem.id
         if (actualVideoId.startsWith("spt:") || actualVideoId.length == 22) {
@@ -278,8 +294,9 @@ fun main() {
             playbackSource = s.playbackSource,
             flacQuality = s.flacQuality,
             preferredQuality = s.audioQuality,
-            preferredClientName = s.streamingClient
-        )
+            preferredClientName = s.streamingClient,
+            flacFallbackToYoutube = s.flacFallbackToYoutube
+        ) ?: return@resolver null
         val dur = if (stream.durationMs > 0) stream.durationMs else mediaItem.durationMs
         mediaItem.copy(
             id = actualVideoId,
@@ -287,6 +304,11 @@ fun main() {
             durationMs = dur,
             audioFormat = stream.formatLabel
         )
+    }
+    // Si mpv reporta un fallo de carga (p.ej. URL googlevideo caducada => 403),
+    // invalidamos la cache de ese tema para que el siguiente intento resuelva fresco.
+    player.onStreamError = { item ->
+        DesktopStreamResolver.invalidate(item.id)
     }
     try {
         player.init()
@@ -1269,7 +1291,8 @@ fun SongRowItem(song: SongItem, onPlay: () -> Unit) {
             artist = song.artists.joinToString(", ") { it.name },
             durationMs = (song.duration ?: 0) * 1000L,
             playbackSource = s.playbackSource, flacQuality = s.flacQuality,
-            preferredQuality = s.audioQuality, preferredClientName = s.streamingClient
+            preferredQuality = s.audioQuality, preferredClientName = s.streamingClient,
+            flacFallbackToYoutube = s.flacFallbackToYoutube
         )
     }
 
@@ -1355,7 +1378,8 @@ fun StoredSongRow(stored: StoredSong, onPlay: () -> Unit) {
                 videoId = stored.id, title = stored.title, artist = stored.artist,
                 durationMs = stored.durationMs,
                 playbackSource = s.playbackSource, flacQuality = s.flacQuality,
-                preferredQuality = s.audioQuality, preferredClientName = s.streamingClient
+                preferredQuality = s.audioQuality, preferredClientName = s.streamingClient,
+                flacFallbackToYoutube = s.flacFallbackToYoutube
             )
         }
     }
@@ -1430,6 +1454,7 @@ fun PlayerBar(
     val index by player.currentIndex.collectAsState()
     val favorites by DesktopLibraryStore.favorites.collectAsState()
     val currentFormat by player.currentFormat.collectAsState()
+    val errorMessage by player.errorMessage.collectAsState()
 
     val current = queue.getOrNull(index)
     val isFav = current != null && favorites.any { it.id == current.id }
@@ -1488,21 +1513,26 @@ fun PlayerBar(
                                     color = Color.White,
                                     modifier = Modifier.weight(1f, fill = false)
                                 )
-                                val badge = currentFormat ?: current?.audioFormat
+                                val badge = if (state == DesktopPlayerState.ERROR) "ERROR" else currentFormat ?: current?.audioFormat
                                 if (!badge.isNullOrBlank() && current != null) {
                                     Spacer(Modifier.width(6.dp))
-                                    Surface(color = Color(0xFF2D224C), shape = RoundedCornerShape(4.dp)) {
+                                    Surface(
+                                        color = if (state == DesktopPlayerState.ERROR) Color(0xFF3B1D1D) else Color(0xFF2D224C),
+                                        shape = RoundedCornerShape(4.dp)
+                                    ) {
                                         Text(
                                             badge, fontSize = 9.sp, fontWeight = FontWeight.Bold,
-                                            color = Color(0xFFA78BFA),
+                                            color = if (state == DesktopPlayerState.ERROR) Color(0xFFEF4444) else Color(0xFFA78BFA),
                                             modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
                                         )
                                     }
                                 }
                             }
                             Text(
-                                current?.artist ?: "YumaPlayer • Toca para expandir",
-                                color = Color(0xFF9CA3AF), fontSize = 12.sp,
+                                if (state == DesktopPlayerState.ERROR && errorMessage != null) errorMessage!!
+                                else current?.artist ?: "YumaPlayer • Toca para expandir",
+                                color = if (state == DesktopPlayerState.ERROR) Color(0xFFEF4444) else Color(0xFF9CA3AF),
+                                fontSize = 12.sp,
                                 maxLines = 1, overflow = TextOverflow.Ellipsis
                             )
                         }
@@ -1659,6 +1689,7 @@ fun AndroidFullPlayerOverlay(
     val favorites by DesktopLibraryStore.favorites.collectAsState()
     val currentFormat by player.currentFormat.collectAsState()
     val settings by DesktopSettingsStore.settings.collectAsState()
+    val errorMessage by player.errorMessage.collectAsState()
 
     val current = queue.getOrNull(index)
     val isFav = current != null && favorites.any { it.id == current.id }
@@ -1729,7 +1760,8 @@ fun AndroidFullPlayerOverlay(
                     Column(Modifier.weight(1f)) {
                         Text(current?.title ?: "Sin reproducción", fontWeight = FontWeight.Bold, fontSize = 20.sp,
                             color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(current?.artist ?: "YumaPlayer", fontSize = 14.sp, color = Color(0xFF9CA3AF),
+                        Text(current?.artist ?: "YumaPlayer", fontSize = 14.sp,
+                            color = if (state == DesktopPlayerState.ERROR) Color(0xFFEF4444) else Color(0xFF9CA3AF),
                             maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                     if (current != null) {
@@ -1745,6 +1777,20 @@ fun AndroidFullPlayerOverlay(
                                 contentDescription = "Me gusta",
                                 tint = if (isFav) Color(0xFFEF4444) else Color.Gray, modifier = Modifier.size(26.dp))
                         }
+                    }
+                }
+                if (state == DesktopPlayerState.ERROR && errorMessage != null) {
+                    Spacer(Modifier.height(8.dp))
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFF3B1D1D)),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            errorMessage!!,
+                            fontSize = 12.sp, color = Color(0xFFEF4444), fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                        )
                     }
                 }
                 Spacer(Modifier.height(8.dp))

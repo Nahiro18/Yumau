@@ -21,8 +21,21 @@ object DesktopFlacResolver {
     // Cache de streams FLAC resueltos (0ms en re-escuchas) + negative cache (fail rapido)
     private val streamCache = ConcurrentHashMap<String, Pair<ResolvedAudioStream, Long>>()
     private val missCache = ConcurrentHashMap<String, Long>()
-    private const val CACHE_TTL_MS = 5 * 60 * 60 * 1000L
+    private const val CACHE_TTL_MS = 2 * 60 * 60 * 1000L
     private const val MISS_TTL_MS = 30 * 60 * 1000L
+
+    /** Las URLs de streaming traen ?expire=<unix>; no reusar una caducada (provocaria 403). */
+    private fun isUrlExpired(url: String): Boolean {
+        return runCatching {
+            val query = url.substringAfter("?", "")
+            if (query.isEmpty()) return false
+            val expire = query.split("&")
+                .firstOrNull { it.startsWith("expire=") }
+                ?.substringAfter("=")
+                ?.toLongOrNull() ?: return false
+            expire < (System.currentTimeMillis() / 1000L) - 60L
+        }.getOrDefault(false)
+    }
 
     private val flacConfig = object : FlacConfig {
         override suspend fun qbdlxEnabled(): Boolean =
@@ -80,7 +93,7 @@ object DesktopFlacResolver {
     ): ResolvedAudioStream? {
         val key = "${title.lowercase()}|${artist.lowercase()}|$quality"
         streamCache[key]?.let { (cached, ts) ->
-            if (System.currentTimeMillis() - ts < CACHE_TTL_MS) return cached
+            if (System.currentTimeMillis() - ts < CACHE_TTL_MS && !isUrlExpired(cached.url)) return cached
             else streamCache.remove(key)
         }
         missCache[key]?.let { ts ->
@@ -108,7 +121,7 @@ object DesktopFlacResolver {
             durationMs = if (durationMs > 0) durationMs else null
         )
 
-        val stream = withTimeoutOrNull(2000L) {
+        val stream = withTimeoutOrNull(1500L) {
             runCatching { resolver.resolve(query, formatId) }.getOrNull()
         }
         if (stream == null) {

@@ -1,8 +1,6 @@
 package moe.rukamori.archivetune.desktop.app
 
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -40,22 +38,27 @@ private data class DiskStreamEntry(
     val timestamp: Long = System.currentTimeMillis(),
 )
 
+/**
+ * Resolutor de streams SIN carrera. Usa exclusivamente la fuente elegida en Ajustes:
+ *  - "YT_MUSIC": solo clientes de YouTube Music.
+ *  - "FLAC": solo Qobuz/FLAC (con fallback opcional a YouTube si el ajuste lo permite).
+ *
+ * Nunca devuelve una URL "https://youtube.com/watch?v=..." porque mpv invocaria
+ * yt-dlp y eso puede tardar MINUTOS. Si no hay URL directa, devuelve null y la UI
+ * muestra un error claro de inmediato.
+ */
 object DesktopStreamResolver {
     private val defaultClientOrder = listOf(
         YouTubeClient.ANDROID_VR_NO_AUTH,
         YouTubeClient.IOS,
         YouTubeClient.ANDROID_MUSIC,
         YouTubeClient.VISIONOS,
-        YouTubeClient.ANDROID_VR_1_61_48,
         YouTubeClient.WEB_REMIX,
     )
 
     private val streamCache = ConcurrentHashMap<String, Pair<ResolvedAudioStream, Long>>()
-    private const val CACHE_TTL_MS = 5 * 60 * 60 * 1000L // 5h: las URLs de Google suelen vivir ~6h
-
-    // Negative cache para FLAC: evita pagar 2s en cada click cuando Qobuz no tiene el tema
-    private val flacMissCache = ConcurrentHashMap<String, Long>()
-    private const val FLAC_MISS_TTL_MS = 30 * 60 * 1000L
+    // 2h: las URLs de googlevideo caducan y reusar una expirada provoca 403 y esperas largas
+    private const val CACHE_TTL_MS = 2 * 60 * 60 * 1000L
 
     private val jsonLenient = Json { ignoreUnknownKeys = true; prettyPrint = false }
     private val diskCacheFile: File by lazy {
@@ -83,6 +86,38 @@ object DesktopStreamResolver {
         return if (playbackSource == "FLAC") "${videoId}_FLAC_${flacQuality}" else "${videoId}_$preferredQuality"
     }
 
+    /** Detecta si una URL de streaming ya expiro (las de googlevideo traen ?expire=<unix>). */
+    private fun isUrlExpired(url: String): Boolean {
+        return runCatching {
+            val query = url.substringAfter("?", "")
+            if (query.isEmpty()) return false
+            val expire = query.split("&")
+                .firstOrNull { it.startsWith("expire=") }
+                ?.substringAfter("=")
+                ?.toLongOrNull() ?: return false
+            expire < (System.currentTimeMillis() / 1000L) - 60L
+        }.getOrDefault(false)
+    }
+
+    /**
+     * Solo URLs de streaming DIRECTAS sirven. Versiones anteriores de la app guardaban
+     * "youtube.com/watch?v=..." como fallback en la cache; mpv entonces invocaba yt-dlp
+     * y tardaba MINUTOS. Se descartan aqui (y de la cache en disco).
+     */
+    private fun isUsableStreamUrl(url: String): Boolean {
+        if (url.isBlank()) return false
+        val lower = url.lowercase()
+        if (lower.contains("youtube.com/watch") || lower.contains("youtu.be/") ||
+            lower.contains("music.youtube.com/watch")
+        ) return false
+        return !isUrlExpired(url)
+    }
+
+    private fun isStale(stream: ResolvedAudioStream, timestamp: Long): Boolean {
+        if (!isUsableStreamUrl(stream.url)) return true
+        return System.currentTimeMillis() - timestamp >= CACHE_TTL_MS
+    }
+
     private fun loadDiskCacheIfNeeded() {
         if (diskLoaded) return
         synchronized(this) {
@@ -93,9 +128,8 @@ object DesktopStreamResolver {
                     val map = jsonLenient.decodeFromString<Map<String, DiskStreamEntry>>(diskCacheFile.readText())
                     val now = System.currentTimeMillis()
                     for ((k, v) in map) {
-                        if (now - v.timestamp < CACHE_TTL_MS && v.url.isNotBlank()) {
+                        if (now - v.timestamp < CACHE_TTL_MS && isUsableStreamUrl(v.url)) {
                             diskCache[k] = v
-                            // Hidratamos tambien la cache en memoria para hits de 0ms
                             streamCache[k] = ResolvedAudioStream(
                                 url = v.url, itag = v.itag, mimeType = v.mimeType,
                                 bitrate = v.bitrate, isOpus = v.isOpus, durationMs = v.durationMs,
@@ -112,10 +146,8 @@ object DesktopStreamResolver {
         val now = System.currentTimeMillis()
         if (now - lastDiskSave < 10_000L) return
         lastDiskSave = now
-        // Escritura en background para no bloquear el hilo de reproduccion
         kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
             try {
-                // Limitamos a 400 entradas mas recientes
                 val snapshot = diskCache.entries.sortedByDescending { it.value.timestamp }.take(400)
                     .associate { it.key to it.value }
                 diskCacheFile.writeText(jsonLenient.encodeToString(snapshot))
@@ -126,7 +158,7 @@ object DesktopStreamResolver {
     private fun putCache(key: String, stream: ResolvedAudioStream) {
         val now = System.currentTimeMillis()
         streamCache[key] = stream to now
-        if (stream.url.isNotBlank() && !stream.url.contains("youtube.com/watch")) {
+        if (stream.url.isNotBlank()) {
             diskCache[key] = DiskStreamEntry(
                 url = stream.url, itag = stream.itag, mimeType = stream.mimeType,
                 bitrate = stream.bitrate, isOpus = stream.isOpus, durationMs = stream.durationMs,
@@ -134,6 +166,13 @@ object DesktopStreamResolver {
             )
             saveDiskCacheThrottled()
         }
+    }
+
+    /** Invalida las entradas de un video (p.ej. tras un 403 de una URL expirada). */
+    fun invalidate(videoId: String) {
+        if (videoId.isBlank()) return
+        streamCache.keys.removeIf { it.startsWith("$videoId") }
+        diskCache.keys.removeIf { it.startsWith("$videoId") }
     }
 
     fun prefetch(
@@ -144,56 +183,29 @@ object DesktopStreamResolver {
         playbackSource: String = "YT_MUSIC",
         flacQuality: String = "HI_RES",
         preferredQuality: String = "HIGH",
-        preferredClientName: String = "ANDROID_VR"
+        preferredClientName: String = "ANDROID_VR",
+        flacFallbackToYoutube: Boolean = true,
     ) {
         if (videoId.isBlank()) return
         loadDiskCacheIfNeeded()
-        val cacheKey = cacheKey(videoId, playbackSource, flacQuality, preferredQuality)
-        streamCache[cacheKey]?.let { (_, ts) ->
-            if (System.currentTimeMillis() - ts < CACHE_TTL_MS) return
-        }
+        val key = cacheKey(videoId, playbackSource, flacQuality, preferredQuality)
+        streamCache[key]?.let { (s, ts) -> if (!isStale(s, ts)) return }
         kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
             runCatching {
                 resolveStreamUrl(
-                    videoId = videoId,
-                    title = title,
-                    artist = artist,
-                    durationMs = durationMs,
-                    playbackSource = playbackSource,
-                    flacQuality = flacQuality,
-                    preferredQuality = preferredQuality,
-                    preferredClientName = preferredClientName
+                    videoId = videoId, title = title, artist = artist, durationMs = durationMs,
+                    playbackSource = playbackSource, flacQuality = flacQuality,
+                    preferredQuality = preferredQuality, preferredClientName = preferredClientName,
+                    flacFallbackToYoutube = flacFallbackToYoutube
                 )
             }
         }
     }
 
-    /** Prefetch de los siguientes N temas de la cola (llamar tras cada play). */
-    fun prefetchQueue(
-        items: List<Pair<String, Triple<String, String, Long>>>,
-        playbackSource: String,
-        flacQuality: String,
-        preferredQuality: String,
-        preferredClientName: String,
-    ) {
-        if (items.isEmpty()) return
-        kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
-            // Solo los 3 siguientes, en paralelo pero con limite natural
-            items.take(3).forEach { (videoId, meta) ->
-                launch {
-                    runCatching {
-                        prefetch(
-                            videoId = videoId, title = meta.first, artist = meta.second,
-                            durationMs = meta.third, playbackSource = playbackSource,
-                            flacQuality = flacQuality, preferredQuality = preferredQuality,
-                            preferredClientName = preferredClientName
-                        )
-                    }
-                }
-            }
-        }
-    }
-
+    /**
+     * Resuelve el stream de audio usando SOLO la fuente configurada (sin carrera).
+     * Devuelve null si la fuente no pudo resolver (la UI muestra el error al instante).
+     */
     suspend fun resolveStreamUrl(
         videoId: String,
         title: String = "",
@@ -202,136 +214,69 @@ object DesktopStreamResolver {
         playbackSource: String = "YT_MUSIC",
         flacQuality: String = "HI_RES",
         preferredQuality: String = "HIGH",
-        preferredClientName: String = "ANDROID_VR"
-    ): ResolvedAudioStream = withContext(Dispatchers.IO) {
+        preferredClientName: String = "ANDROID_VR",
+        flacFallbackToYoutube: Boolean = true,
+    ): ResolvedAudioStream? = withContext(Dispatchers.IO) {
         loadDiskCacheIfNeeded()
-        val cacheKey = cacheKey(videoId, playbackSource, flacQuality, preferredQuality)
-        streamCache[cacheKey]?.let { (cachedStream, timestamp) ->
-            if (System.currentTimeMillis() - timestamp < CACHE_TTL_MS && cachedStream.url.isNotBlank()) {
-                return@withContext cachedStream
-            } else {
-                streamCache.remove(cacheKey)
-            }
+        val key = cacheKey(videoId, playbackSource, flacQuality, preferredQuality)
+
+        streamCache[key]?.let { (cached, ts) ->
+            if (!isStale(cached, ts)) return@withContext cached
+            streamCache.remove(key)
         }
-        diskCache[cacheKey]?.let { disk ->
-            if (System.currentTimeMillis() - disk.timestamp < CACHE_TTL_MS && disk.url.isNotBlank()) {
+        diskCache[key]?.let { disk ->
+            if (System.currentTimeMillis() - disk.timestamp < CACHE_TTL_MS && isUsableStreamUrl(disk.url)) {
                 val mem = ResolvedAudioStream(
                     url = disk.url, itag = disk.itag, mimeType = disk.mimeType,
                     bitrate = disk.bitrate, isOpus = disk.isOpus, durationMs = disk.durationMs,
                     clientName = disk.clientName, formatLabel = disk.formatLabel
                 )
-                streamCache[cacheKey] = mem to disk.timestamp
+                streamCache[key] = mem to disk.timestamp
                 return@withContext mem
             } else {
-                diskCache.remove(cacheKey)
+                diskCache.remove(key)
             }
         }
 
-        // MODO YT PURO: via rapida sin tocar FLAC (0 overhead)
-        if (playbackSource != "FLAC") {
-            val yt = resolveYouTubeFast(videoId, preferredQuality, preferredClientName, durationMs)
-            if (yt != null) {
-                putCache(cacheKey, yt)
-                return@withContext yt
-            }
-            return@withContext ResolvedAudioStream(
-                url = "https://www.youtube.com/watch?v=$videoId",
-                durationMs = durationMs,
-                formatLabel = "WEB • OPUS"
-            )
+        val resolved = when (playbackSource) {
+            "FLAC" -> resolveViaFlac(videoId, title, artist, durationMs, flacQuality, flacFallbackToYoutube, preferredQuality, preferredClientName)
+            else -> resolveViaYouTube(videoId, preferredQuality, preferredClientName, durationMs)
         }
 
-        // MODO FLAC: carrera en paralelo FLAC vs YT.
-        // Si FLAC responde rapido (<1.2s) gana (lossless). Si no, YT responde primero
-        // y no bloqueamos la reproduccion esperando a Qobuz.
-        if (title.isBlank()) {
-            val yt = resolveYouTubeFast(videoId, preferredQuality, preferredClientName, durationMs)
-            if (yt != null) {
-                putCache(cacheKey, yt)
-                return@withContext yt
-            }
-            return@withContext ResolvedAudioStream(
-                url = "https://www.youtube.com/watch?v=$videoId",
-                durationMs = durationMs,
-                formatLabel = "WEB • OPUS"
-            )
-        }
-
-        val flacKey = "$title|$artist|$flacQuality"
-        val flacMissTs = flacMissCache[flacKey]
-        val skipFlac = flacMissTs != null && System.currentTimeMillis() - flacMissTs < FLAC_MISS_TTL_MS
-
-        val result: ResolvedAudioStream = coroutineScope {
-            val flacDeferred = if (skipFlac) null else async {
-                withTimeoutOrNull(2000L) {
-                    DesktopFlacResolver.resolve(
-                        title = title,
-                        artist = artist,
-                        durationMs = durationMs,
-                        quality = flacQuality
-                    )
-                }
-            }
-            val ytDeferred = async {
-                resolveYouTubeFast(videoId, preferredQuality, preferredClientName, durationMs)
-            }
-
-            // Esperamos FLAC solo hasta 1200ms: si llega, es lossless inmediato.
-            val fastFlac = if (flacDeferred != null) {
-                withTimeoutOrNull(1200L) { flacDeferred.await() }
-            } else null
-
-            if (fastFlac != null) {
-                ytDeferred.cancel()
-                // Cancelamos el deferred FLAC restante si ya obtuvimos resultado (ya completo)
-                fastFlac
-            } else {
-                // YT manda: respuesta en ~300-900ms tipico. FLAC sigue en background
-                // por si llega antes que YT falle.
-                val yt = try { ytDeferred.await() } catch (_: Exception) { null }
-                if (yt != null) {
-                    // No cancelamos flacDeferred bruscamente: si FLAC llega tarde lo ignoramos,
-                    // pero marcamos miss solo cuando FLAC confirma fallo.
-                    if (flacDeferred != null) {
-                        launch {
-                            val lateFlac = runCatching { flacDeferred.await() }.getOrNull()
-                            if (lateFlac == null) {
-                                flacMissCache[flacKey] = System.currentTimeMillis()
-                            }
-                        }
-                    }
-                    yt
-                } else {
-                    // YT fallo: esperamos FLAC como ultimo recurso (hasta su timeout)
-                    val flacWait = try { flacDeferred?.await() } catch (_: Exception) { null }
-                    if (flacWait != null) {
-                        flacWait
-                    } else {
-                        if (flacDeferred != null) flacMissCache[flacKey] = System.currentTimeMillis()
-                        ResolvedAudioStream(
-                            url = "https://www.youtube.com/watch?v=$videoId",
-                            durationMs = durationMs,
-                            formatLabel = "WEB • OPUS"
-                        )
-                    }
-                }
-            }
-        }
-
-        // No cacheamos el fallback watch-url en disco (mpv lo resuelve con yt-dlp, lento).
-        if (!result.url.contains("youtube.com/watch")) {
-            putCache(cacheKey, result)
+        if (resolved != null && resolved.url.isNotBlank()) {
+            putCache(key, resolved)
+            resolved
         } else {
-            streamCache[cacheKey] = result to System.currentTimeMillis()
+            null
         }
-        result
+    }
+
+    /** Solo FLAC. Si falla y el ajuste lo permite, cae a YouTube (secuencial, sin carrera). */
+    private suspend fun resolveViaFlac(
+        videoId: String,
+        title: String,
+        artist: String,
+        durationMs: Long,
+        flacQuality: String,
+        fallbackToYoutube: Boolean,
+        preferredQuality: String,
+        preferredClientName: String,
+    ): ResolvedAudioStream? {
+        if (title.isNotBlank()) {
+            val flac = DesktopFlacResolver.resolve(
+                title = title, artist = artist, durationMs = durationMs, quality = flacQuality
+            )
+            if (flac != null) return flac
+        }
+        if (!fallbackToYoutube) return null
+        return resolveViaYouTube(videoId, preferredQuality, preferredClientName, durationMs)
     }
 
     /**
-     * Via rapida de YouTube: carrera paralela de los 2 mejores clientes.
-     * El primero que devuelva URL directa gana (~300-900ms tipico).
+     * Solo YouTube Music: carrera corta de 3 clientes en paralelo, luego 2 de refuerzo.
+     * Sin URLs de watch (evita yt-dlp). Devuelve null si ningun cliente dio URL directa.
      */
-    private suspend fun resolveYouTubeFast(
+    private suspend fun resolveViaYouTube(
         videoId: String,
         preferredQuality: String,
         preferredClientName: String,
@@ -339,37 +284,38 @@ object DesktopStreamResolver {
     ): ResolvedAudioStream? = withContext(Dispatchers.IO) {
         val clients = getClientCandidates(preferredClientName)
 
-        // Solo los 2 primeros en paralelo: menos carga, misma velocidad.
-        // El 3er cliente queda como fallback secuencial.
-        val topClients = clients.take(2)
+        val topClients = clients.take(3)
         val candidateChannel = kotlinx.coroutines.channels.Channel<ResolvedAudioStream>(capacity = topClients.size)
         val probeJobs = topClients.map { client ->
             launch {
                 val stream = tryResolveClient(videoId, client, preferredQuality, durationMs)
-                if (stream != null) {
-                    candidateChannel.trySend(stream)
-                }
+                if (stream != null) candidateChannel.trySend(stream)
             }
         }
 
-        val fastResult = withTimeoutOrNull(2500L) {
+        val fastResult = withTimeoutOrNull(2000L) {
             candidateChannel.receiveCatching().getOrNull()
         }
-
         if (fastResult != null) {
             probeJobs.forEach { it.cancel() }
             return@withContext fastResult
         }
 
-        // Fallback secuencial para el resto (incluye el 3er cliente rapido)
-        for (client in clients.drop(2)) {
-            val stream = tryResolveClient(videoId, client, preferredQuality, durationMs)
-            if (stream != null) {
-                probeJobs.forEach { runCatching { it.cancel() } }
-                return@withContext stream
+        // Refuerzo: 2 clientes mas, en paralelo, timeout corto
+        val backup = clients.drop(3).take(2)
+        val backupChannel = kotlinx.coroutines.channels.Channel<ResolvedAudioStream>(capacity = backup.size)
+        val backupJobs = backup.map { client ->
+            launch {
+                val stream = tryResolveClient(videoId, client, preferredQuality, durationMs)
+                if (stream != null) backupChannel.trySend(stream)
             }
         }
-        null
+        val backupResult = withTimeoutOrNull(1800L) {
+            backupChannel.receiveCatching().getOrNull()
+        }
+        probeJobs.forEach { runCatching { it.cancel() } }
+        backupJobs.forEach { runCatching { it.cancel() } }
+        backupResult
     }
 
     private suspend fun tryResolveClient(
@@ -399,14 +345,18 @@ object DesktopStreamResolver {
 
             val candidate = selectFormat(formats, preferredQuality) ?: formats.firstOrNull() ?: return null
 
-            // FAST PATH: URL directa sin deofuscacion JS pesada
-            val streamUrl = if (!candidate.url.isNullOrBlank()) {
-                candidate.url
-            } else {
-                // CIPHER PATH: solo si el formato exige descifrado de firma
-                withTimeoutOrNull(1800L) {
+            val direct = candidate.url
+            // FAST PATH: URL directa. PERO si trae el parametro "n" (throttling de YouTube),
+            // hay que deofuscarlo o el audio cargara a velocidad ridicula (minutos).
+            // El runtime de cifrado ya esta calentado en segundo plano, asi que es rapido.
+            val streamUrl = when {
+                !direct.isNullOrBlank() && !hasNParam(direct) -> direct
+                !direct.isNullOrBlank() -> withTimeoutOrNull(1500L) {
                     NewPipeUtils.getStreamUrl(candidate, videoId, client).getOrNull()
-                } ?: candidate.url
+                } ?: direct
+                else -> withTimeoutOrNull(1800L) {
+                    NewPipeUtils.getStreamUrl(candidate, videoId, client).getOrNull()
+                }
             }
 
             if (!streamUrl.isNullOrBlank()) {
@@ -431,6 +381,10 @@ object DesktopStreamResolver {
             null
         }
     }
+
+    /** Detecta el parametro "n" (throttling de YouTube) en una URL de streaming. */
+    private fun hasNParam(url: String): Boolean =
+        url.contains("?n=") || url.contains("&n=")
 
     fun formatAudioQualityLabel(mimeType: String?, itag: Int?, bitrate: Int?): String {
         val m = mimeType.orEmpty().lowercase()

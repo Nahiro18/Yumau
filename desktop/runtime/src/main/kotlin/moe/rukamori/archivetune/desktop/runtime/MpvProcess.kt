@@ -58,22 +58,27 @@ class MpvProcess(
                 add("--idle=yes")
                 add("--force-window=no")
                 add("--video=no")
-                // Arranque ultra-rapido: buffer/probe minimos para que el audio suene en <500ms
-                add("--audio-buffer=0.1")
-                add("--demuxer-lavf-probesize=16384")
-                add("--demuxer-lavf-analyzeduration=0.05")
+                // Arranque rapido pero ESTABLE: buffers moderados. Un --network-timeout
+                // demasiado corto provoca abortos+reintentos en cadena (esperas de minutos).
+                add("--audio-buffer=0.3")
+                add("--demuxer-lavf-probesize=32768")
+                add("--demuxer-lavf-analyzeduration=0.1")
                 add("--cache=yes")
                 add("--cache-pause=no")
-                add("--cache-pause-wait=0.1")
-                add("--demuxer-max-bytes=16M")
-                add("--demuxer-readahead-secs=10")
-                add("--network-timeout=4")
+                add("--cache-pause-wait=0.3")
+                add("--demuxer-max-bytes=32M")
+                add("--demuxer-readahead-secs=20")
+                add("--network-timeout=10")
                 add("--no-resume-playback")
                 add("--audio-display=no")
                 add("--term-osd=no")
                 add("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
-                add("--stream-lavf-o=reconnect=1,reconnect_streamed=1,reconnect_delay_max=3")
-                add("--ytdl-format=bestaudio/best")
+                // Reintentos de red LIMITADOS: con reconnect infinito, una URL caducada
+                // puede dejar la reproduccion colgada durante minutos.
+                add("--stream-lavf-o=reconnect=1,reconnect_streamed=1,reconnect_delay_max=2")
+                // yt-dlp DESACTIVADO: la app siempre entrega URLs directas. Si se pasara una
+                // URL de "watch", yt-dlp tardaria MINUTOS; mejor fallar al instante.
+                add("--ytdl=no")
                 addAll(extraArgs)
             }
         process =
@@ -210,6 +215,11 @@ class MpvProcess(
     ) {
         listeners.getOrPut(name) { mutableListOf() }.add(listener)
         command(listOf("observe_property", nextId.getAndIncrement(), name))
+    }
+
+    /** Notifica cuando un archivo termina; el elemento incluye "reason" ("eof", "error", ...). */
+    fun observeEndFile(listener: (JsonElement?) -> Unit) {
+        listeners.getOrPut("end-file") { mutableListOf() }.add(listener)
     }
 
     fun quit() {

@@ -788,7 +788,7 @@ fun PlaybackSettingsScreen(
         ) {
             Column(Modifier.padding(18.dp)) {
                 Text("Fuente de Reproducción Principal", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color.White)
-                Text("Selecciona la fuente de streaming para reproducir pistas", color = Color.Gray, fontSize = 12.sp)
+                Text("Se usa SOLO la fuente seleccionada (sin carrera entre FLAC y YouTube)", color = Color.Gray, fontSize = 12.sp)
                 Spacer(Modifier.height(14.dp))
 
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -828,6 +828,25 @@ fun PlaybackSettingsScreen(
                                     }
                                 },
                                 label = { Text(label) }
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(14.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(
+                            checked = settings.flacFallbackToYoutube,
+                            onCheckedChange = { checked ->
+                                scope.launch {
+                                    DesktopSettingsStore.updateSettings { it.copy(flacFallbackToYoutube = checked) }
+                                }
+                            }
+                        )
+                        Column(Modifier.weight(1f)) {
+                            Text("Fallback a YouTube Music", fontWeight = FontWeight.Medium, fontSize = 14.sp, color = Color.White)
+                            Text(
+                                "Si una pista no existe en FLAC, se reproduce desde YouTube. " +
+                                    "Desactivalo para usar FLAC de forma estricta.",
+                                color = Color.Gray, fontSize = 12.sp
                             )
                         }
                     }

@@ -15,6 +15,7 @@ data class DesktopAppSettings(
     // Reproducción y Audio
     val playbackSource: String = "YT_MUSIC", // "YT_MUSIC", "FLAC"
     val flacQuality: String = "HI_RES", // "CD", "HI_RES", "MAX"
+    val flacFallbackToYoutube: Boolean = true, // si FLAC no encuentra la pista, usa YouTube (secuencial, sin carrera)
     val qobuzAppId: String = "",
     val qobuzAppSecret: String = "",
     val qobuzUserAuthToken: String = "",
