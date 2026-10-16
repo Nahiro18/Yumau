@@ -210,6 +210,9 @@ class DesktopPlayer(
         if (item.durationMs > 0) {
             _durationMs.value = item.durationMs
         }
+        // Estado optimista: la UI muestra "reproduciendo" al instante (estilo Android),
+        // sin esperar al roundtrip bloqueante de mpv.
+        _state.value = DesktopPlayerState.PLAYING
         playJob?.cancel()
         playJob = scope.launch {
             val resolvedItem = if (item.uri.isBlank()) {
@@ -227,29 +230,31 @@ class DesktopPlayer(
                 if (resolvedItem.durationMs > 0) {
                     _durationMs.value = resolvedItem.durationMs
                 }
-                runCatching {
-                    mpv.command(listOf("loadfile", resolvedItem.uri, "replace"))
-                    mpv.command(listOf("set_property", "pause", false))
-                    _state.value = DesktopPlayerState.PLAYING
-                }.onFailure {
-                    _state.value = DesktopPlayerState.ERROR
-                    if (autoSkipNextOnError && items.size > 1) {
-                        delay(500)
-                        next()
-                    }
-                }
+                // loadfile fire-and-forget: no bloqueamos 10s esperando reply de mpv.
+                // El audio arranca en background mientras la UI ya muestra PLAYING.
+                mpv.commandAsync(listOf("loadfile", resolvedItem.uri, "replace"))
+                mpv.commandAsync(listOf("set_property", "pause", false))
+                _state.value = DesktopPlayerState.PLAYING
 
-                // Asynchronously prefetch next track in queue
-                val nextIdx = if (shuffleEnabled) -1 else (index + 1)
-                if (nextIdx in currentList.indices && currentList[nextIdx].uri.isBlank()) {
-                    launch {
-                        runCatching {
-                            val nextResolved = itemResolver?.invoke(currentList[nextIdx])
-                            if (nextResolved != null && nextResolved.uri.isNotBlank()) {
-                                val updated = _queue.value.toMutableList()
-                                if (nextIdx < updated.size && updated[nextIdx].id == nextResolved.id) {
-                                    updated[nextIdx] = nextResolved
-                                    _queue.value = updated
+                // Prefetch agresivo: resuelve los siguientes 3 temas en paralelo
+                // para que "Siguiente" sea instantaneo (0ms, cache hit).
+                val snapshot = _queue.value
+                for (offset in 1..3) {
+                    val nextIdx = index + offset
+                    if (shuffleEnabled && offset > 1) break
+                    if (nextIdx in snapshot.indices && snapshot[nextIdx].uri.isBlank()) {
+                        val nextItem = snapshot[nextIdx]
+                        launch {
+                            runCatching {
+                                val nextResolved = itemResolver?.invoke(nextItem)
+                                if (nextResolved != null && nextResolved.uri.isNotBlank()) {
+                                    val updated = _queue.value.toMutableList()
+                                    if (nextIdx < updated.size && updated[nextIdx].id == nextResolved.id &&
+                                        updated[nextIdx].uri.isBlank()
+                                    ) {
+                                        updated[nextIdx] = nextResolved
+                                        _queue.value = updated
+                                    }
                                 }
                             }
                         }

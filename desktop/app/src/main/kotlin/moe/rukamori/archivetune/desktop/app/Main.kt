@@ -75,7 +75,8 @@ fun playTrack(
     thumbnailUrl: String?,
 ) {
     val initialDurationMs = (durationSeconds ?: 0) * 1000L
-    // Immediate visual feedback (0ms): show track with "Cargando audio..." state
+    // Feedback visual inmediato (0ms, estilo Android mini-player): muestra el tema
+    // en estado PLAYING optimista mientras se resuelve el stream en background.
     player.setPreparing(
         DesktopMediaItem(
             id = songId,
@@ -92,15 +93,20 @@ fun playTrack(
     activePlayTrackJob?.cancel()
 
     activePlayTrackJob = scope.launch {
-        DesktopLibraryStore.recordHistory(
-            StoredSong(
-                id = songId,
-                title = title,
-                artist = artist,
-                durationMs = initialDurationMs,
-                thumbnailUrl = thumbnailUrl
-            )
-        )
+        // Historial en background: no bloquea la resolucion del stream.
+        launch(Dispatchers.IO) {
+            runCatching {
+                DesktopLibraryStore.recordHistory(
+                    StoredSong(
+                        id = songId,
+                        title = title,
+                        artist = artist,
+                        durationMs = initialDurationMs,
+                        thumbnailUrl = thumbnailUrl
+                    )
+                )
+            }
+        }
         val s = DesktopSettingsStore.settings.value
         val stream = DesktopStreamResolver.resolveStreamUrl(
             videoId = songId,
@@ -125,6 +131,7 @@ fun playTrack(
         player.setQueue(listOf(media), startIndex = 0)
 
         // Auto-cola inteligente (Radio algorithm) - Llena la cola con ~25 canciones recomendadas
+        // y pre-resuelve los 3 siguientes para que "Siguiente" sea instantaneo.
         activeRadioJob = scope.launch(Dispatchers.IO) {
             runCatching {
                 val nextResult = YouTube.next(WatchEndpoint(videoId = songId)).getOrNull()
@@ -147,12 +154,28 @@ fun playTrack(
                     val currentTrack = player.queue.value.getOrNull(player.currentIndex.value)
                     if (currentTrack?.id == songId) {
                         player.addToQueue(recommended)
+                        // Pre-resuelve los 3 siguientes en paralelo (cache hit al pulsar Next)
+                        val st = DesktopSettingsStore.settings.value
+                        recommended.take(3).forEach { item ->
+                            launch {
+                                runCatching {
+                                    DesktopStreamResolver.prefetch(
+                                        videoId = item.id, title = item.title, artist = item.artist,
+                                        durationMs = item.durationMs, playbackSource = st.playbackSource,
+                                        flacQuality = st.flacQuality, preferredQuality = st.audioQuality,
+                                        preferredClientName = st.streamingClient
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
     }
 }
+
+private var activeSpotifyMatchJob: kotlinx.coroutines.Job? = null
 
 fun playSpotifyTrack(
     scope: CoroutineScope,
@@ -170,8 +193,14 @@ fun playSpotifyTrack(
             audioFormat = "Buscando en YouTube..."
         )
     )
-    scope.launch {
-        val ytSong = DesktopSpotifyStore.matchSpotifyTrackToYouTube(track)
+    activeSpotifyMatchJob?.cancel()
+    activeSpotifyMatchJob = scope.launch {
+        // Match Spotify->YT con timeout corto: si tarda, no dejamos al usuario esperando.
+        val ytSong = withContext(Dispatchers.IO) {
+            kotlinx.coroutines.withTimeoutOrNull(6000L) {
+                DesktopSpotifyStore.matchSpotifyTrackToYouTube(track)
+            }
+        }
         if (ytSong != null) {
             playTrack(
                 scope = scope,
@@ -193,6 +222,26 @@ fun playQueue(
 ) {
     if (items.isEmpty()) return
     player.setQueue(items, startIndex = startIndex)
+    // Pre-resuelve los siguientes 3 temas de la cola para avance instantaneo.
+    kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
+        val s = DesktopSettingsStore.settings.value
+        items.drop(startIndex + 1).take(3).forEach { item ->
+            launch {
+                runCatching {
+                    // Solo si el id parece videoId de YT (11 chars); si es Spotify id,
+                    // el itemResolver lo matcheara al reproducir.
+                    if (item.uri.isBlank() && item.id.length == 11) {
+                        DesktopStreamResolver.prefetch(
+                            videoId = item.id, title = item.title, artist = item.artist,
+                            durationMs = item.durationMs, playbackSource = s.playbackSource,
+                            flacQuality = s.flacQuality, preferredQuality = s.audioQuality,
+                            preferredClientName = s.streamingClient
+                        )
+                    }
+                }
+            }
+        }
+    }
 }
 
 fun main() {
@@ -286,6 +335,7 @@ fun YumaApp(player: DesktopPlayer) {
     var rawPlainLyrics by remember { mutableStateOf<String?>(null) }
     var isLyricsLoading by remember { mutableStateOf(false) }
     var isNowPlayingSidePanelOpen by remember { mutableStateOf(false) }
+    var isFullPlayerOpen by remember { mutableStateOf(false) }
 
     val queue by player.queue.collectAsState()
     val currentIndex by player.currentIndex.collectAsState()
@@ -335,6 +385,7 @@ fun YumaApp(player: DesktopPlayer) {
 
     MaterialTheme(colorScheme = darkScheme) {
         Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+            Box(Modifier.fillMaxSize()) {
             Column(Modifier.fillMaxSize()) {
                 Row(Modifier.weight(1f).fillMaxWidth()) {
                     Sidebar(
@@ -415,6 +466,7 @@ fun YumaApp(player: DesktopPlayer) {
                 PlayerBar(
                     player = player,
                     onToggleSidePanel = { isNowPlayingSidePanelOpen = !isNowPlayingSidePanelOpen },
+                    onExpandFullPlayer = { isFullPlayerOpen = true },
                     onOpenLyrics = {
                         if (selectedSection != 4) {
                             previousSection = selectedSection
@@ -433,71 +485,96 @@ fun YumaApp(player: DesktopPlayer) {
                     }
                 )
             }
+            // Overlay estilo Android FullPlayer (cubre toda la ventana, como el bottom-sheet expandido)
+            if (isFullPlayerOpen) {
+                AndroidFullPlayerOverlay(
+                    player = player,
+                    onCollapse = { isFullPlayerOpen = false },
+                    onOpenLyrics = {
+                        isFullPlayerOpen = false
+                        if (selectedSection != 4) {
+                            previousSection = selectedSection
+                            selectedSection = 4
+                        }
+                    },
+                    onOpenQueue = {
+                        isFullPlayerOpen = false
+                        if (selectedSection != 5) {
+                            previousSection = selectedSection
+                            selectedSection = 5
+                        }
+                    }
+                )
+            }
+            }
         }
     }
 }
 
 @Composable
 fun Sidebar(selectedSection: Int, onSelectSection: (Int) -> Unit) {
+    // Estilo Android NavigationRail (tablet): estrecho, iconos con pill indicador,
+    // mismos 4 destinos que la app movil (Inicio/Buscar/Biblioteca/Ajustes).
+    // No se elimina nada: solo se reordena visualmente para parecerse a Android.
     Surface(
-        modifier = Modifier.width(230.dp).fillMaxHeight(),
+        modifier = Modifier.width(88.dp).fillMaxHeight(),
         color = Color(0xFF141720)
     ) {
         Column(
-            modifier = Modifier.fillMaxSize().padding(16.dp),
+            modifier = Modifier.fillMaxSize().padding(vertical = 16.dp, horizontal = 8.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.SpaceBetween
         ) {
-            Column {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(bottom = 24.dp)
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Box(
+                    modifier = Modifier
+                        .size(44.dp)
+                        .clip(CircleShape)
+                        .background(AccentGradient),
+                    contentAlignment = Alignment.Center
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(38.dp)
-                            .clip(CircleShape)
-                            .background(AccentGradient),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(Icons.Default.MusicNote, contentDescription = null, tint = Color.White)
-                    }
-                    Spacer(Modifier.width(12.dp))
-                    Column {
-                        Text(
-                            "YumaPlayer",
-                            fontSize = 18.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color.White
-                        )
-                        Text(
-                            "Linux Mint Edition",
-                            fontSize = 11.sp,
-                            color = Color(0xFF9CA3AF)
-                        )
-                    }
+                    Icon(Icons.Default.MusicNote, contentDescription = "YumaPlayer", tint = Color.White, modifier = Modifier.size(24.dp))
                 }
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "Yuma",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White
+                )
+                Text(
+                    "Mint",
+                    fontSize = 9.sp,
+                    color = Color(0xFF9CA3AF)
+                )
+
+                Spacer(Modifier.height(20.dp))
 
                 // Identical to mobile tabs: Inicio, Buscar, Biblioteca, Ajustes
                 val items = listOf(
                     Triple(0, "Inicio", Icons.Default.Home),
                     Triple(1, "Buscar", Icons.Default.Search),
-                    Triple(2, "Biblioteca", Icons.Default.LibraryMusic),
+                    Triple(2, "Biblio", Icons.Default.LibraryMusic),
                     Triple(3, "Ajustes", Icons.Default.Settings),
                 )
 
                 items.forEach { (index, title, icon) ->
-                    val isSelected = selectedSection == index
-                    Surface(
+                    val isSelected = selectedSection == index || (selectedSection >= 4 && index == 0)
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(vertical = 4.dp)
-                            .clip(RoundedCornerShape(10.dp))
-                            .clickable { onSelectSection(index) },
-                        color = if (isSelected) Color(0xFF282542) else Color.Transparent
+                            .clip(RoundedCornerShape(16.dp))
+                            .clickable { onSelectSection(index) }
+                            .padding(vertical = 8.dp)
                     ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
+                        Box(
+                            modifier = Modifier
+                                .width(56.dp)
+                                .height(32.dp)
+                                .clip(CircleShape)
+                                .background(if (isSelected) Color(0xFF282542) else Color.Transparent),
+                            contentAlignment = Alignment.Center
                         ) {
                             Icon(
                                 icon,
@@ -505,24 +582,22 @@ fun Sidebar(selectedSection: Int, onSelectSection: (Int) -> Unit) {
                                 tint = if (isSelected) Color(0xFFA78BFA) else Color(0xFF9CA3AF),
                                 modifier = Modifier.size(20.dp)
                             )
-                            Spacer(Modifier.width(14.dp))
-                            Text(
-                                title,
-                                color = if (isSelected) Color.White else Color(0xFFD1D5DB),
-                                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
-                                fontSize = 14.sp,
-                                modifier = Modifier.weight(1f)
-                            )
                         }
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            title,
+                            color = if (isSelected) Color.White else Color(0xFF9CA3AF),
+                            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                            fontSize = 11.sp
+                        )
                     }
                 }
             }
 
             Text(
-                "YumaPlayer v1.0.0",
-                fontSize = 10.sp,
-                color = Color(0xFF6B7280),
-                modifier = Modifier.align(Alignment.CenterHorizontally)
+                "v1.0.0",
+                fontSize = 9.sp,
+                color = Color(0xFF6B7280)
             )
         }
     }
@@ -1087,6 +1162,17 @@ fun QueueScreen(player: DesktopPlayer, onBack: () -> Unit) {
 @Composable
 fun SpotifyTrackRow(track: SpotifyTrack, onPlay: () -> Unit) {
     val thumbBitmap = rememberNetworkImage(track.album?.images?.firstOrNull()?.url)
+    // Prefetch especulativo estilo Android: al volverse visible, pre-resolvemos el
+    // match YT en background para que el click posterior sea mas rapido.
+    LaunchedEffect(track.id) {
+        runCatching {
+            // Solo calentamos el match (search cacheado); el stream se resuelve al click.
+            // No bloquea la UI.
+            kotlinx.coroutines.withContext(Dispatchers.IO) {
+                DesktopSpotifyStore.matchSpotifyTrackToYouTube(track)
+            }
+        }
+    }
 
     Card(
         modifier = Modifier
@@ -1149,6 +1235,17 @@ fun SongRowItem(song: SongItem, onPlay: () -> Unit) {
     val isFav = favorites.any { it.id == song.id }
     val scope = rememberCoroutineScope()
     val thumbBitmap = rememberNetworkImage(song.thumbnail)
+    // Prefetch del stream al mostrarse en lista (hover especulativo): click -> 0ms si cache hit.
+    LaunchedEffect(song.id) {
+        val s = DesktopSettingsStore.settings.value
+        DesktopStreamResolver.prefetch(
+            videoId = song.id, title = song.title,
+            artist = song.artists.joinToString(", ") { it.name },
+            durationMs = (song.duration ?: 0) * 1000L,
+            playbackSource = s.playbackSource, flacQuality = s.flacQuality,
+            preferredQuality = s.audioQuality, preferredClientName = s.streamingClient
+        )
+    }
 
     Card(
         modifier = Modifier
@@ -1224,6 +1321,18 @@ fun StoredSongRow(stored: StoredSong, onPlay: () -> Unit) {
     val isFav = favorites.any { it.id == stored.id }
     val scope = rememberCoroutineScope()
     val thumbBitmap = rememberNetworkImage(stored.thumbnailUrl)
+    LaunchedEffect(stored.id) {
+        // Solo prefetch si parece videoId YT; si no, el match se hara al click.
+        if (stored.id.length == 11) {
+            val s = DesktopSettingsStore.settings.value
+            DesktopStreamResolver.prefetch(
+                videoId = stored.id, title = stored.title, artist = stored.artist,
+                durationMs = stored.durationMs,
+                playbackSource = s.playbackSource, flacQuality = s.flacQuality,
+                preferredQuality = s.audioQuality, preferredClientName = s.streamingClient
+            )
+        }
+    }
 
     Card(
         modifier = Modifier
@@ -1281,9 +1390,147 @@ fun StoredSongRow(stored: StoredSong, onPlay: () -> Unit) {
 fun PlayerBar(
     player: DesktopPlayer,
     onToggleSidePanel: () -> Unit = {},
+    onExpandFullPlayer: () -> Unit = {},
     onOpenLyrics: () -> Unit,
     onOpenQueue: () -> Unit
 ) {
+    // Mini-player estilo Android: tarjeta flotante compacta con caratula, titulo,
+    // favorito, play/pausa, siguiente y barra de progreso fina.
+    // Todos los controles avanzados viven en el FullPlayer expandido (sin borrar nada).
+    val state by player.state.collectAsState()
+    val position by player.positionMs.collectAsState()
+    val duration by player.durationMs.collectAsState()
+    val queue by player.queue.collectAsState()
+    val index by player.currentIndex.collectAsState()
+    val favorites by DesktopLibraryStore.favorites.collectAsState()
+    val currentFormat by player.currentFormat.collectAsState()
+
+    val current = queue.getOrNull(index)
+    val isFav = current != null && favorites.any { it.id == current.id }
+    val scope = rememberCoroutineScope()
+    val thumbBitmap = rememberNetworkImage(current?.thumbnailUrl)
+    val progress = if (duration > 0) (position.toFloat() / duration.toFloat()).coerceIn(0f, 1f) else 0f
+
+    Box(Modifier.fillMaxWidth().background(Color.Transparent).padding(horizontal = 12.dp, vertical = 8.dp)) {
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF1B1E29)),
+            border = BorderStroke(1.dp, Color(0x22FFFFFF)),
+            elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
+        ) {
+            Column(Modifier.fillMaxWidth()) {
+                Row(
+                    Modifier.fillMaxWidth().clickable { if (current != null) onExpandFullPlayer() }
+                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (thumbBitmap != null) {
+                        Image(
+                            bitmap = thumbBitmap,
+                            contentDescription = null,
+                            modifier = Modifier.size(52.dp).clip(RoundedCornerShape(10.dp)),
+                            contentScale = ContentScale.Crop
+                        )
+                    } else {
+                        Box(
+                            modifier = Modifier.size(52.dp).clip(RoundedCornerShape(10.dp)).background(Color(0xFF282B35)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(Icons.Default.MusicNote, contentDescription = null, tint = Color.Gray)
+                        }
+                    }
+
+                    Spacer(Modifier.width(12.dp))
+
+                    Column(Modifier.weight(1f)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                current?.title ?: if (state == DesktopPlayerState.IDLE) "Listo para reproducir" else "Cargando...",
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 14.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                color = Color.White,
+                                modifier = Modifier.weight(1f, fill = false)
+                            )
+                            val badge = currentFormat ?: current?.audioFormat
+                            if (!badge.isNullOrBlank() && current != null) {
+                                Spacer(Modifier.width(6.dp))
+                                Surface(color = Color(0xFF2D224C), shape = RoundedCornerShape(4.dp)) {
+                                    Text(
+                                        badge, fontSize = 9.sp, fontWeight = FontWeight.Bold,
+                                        color = Color(0xFFA78BFA),
+                                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                                    )
+                                }
+                            }
+                        }
+                        Text(
+                            current?.artist ?: "YumaPlayer • Toca para expandir",
+                            color = Color(0xFF9CA3AF), fontSize = 12.sp,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis
+                        )
+                    }
+
+                    if (current != null) {
+                        IconButton(onClick = {
+                            scope.launch {
+                                DesktopLibraryStore.toggleFavorite(
+                                    StoredSong(
+                                        id = current.id, title = current.title, artist = current.artist,
+                                        durationMs = current.durationMs, thumbnailUrl = current.thumbnailUrl
+                                    )
+                                )
+                            }
+                        }) {
+                            Icon(
+                                if (isFav) Icons.Default.Favorite else Icons.Outlined.FavoriteBorder,
+                                contentDescription = "Me gusta",
+                                tint = if (isFav) Color(0xFFEF4444) else Color.Gray,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    }
+                    IconButton(
+                        onClick = { player.playPause() },
+                        modifier = Modifier.size(44.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary)
+                    ) {
+                        Icon(
+                            if (state == DesktopPlayerState.PLAYING) Icons.Default.Pause else Icons.Default.PlayArrow,
+                            contentDescription = "Play/Pausa", tint = Color.White
+                        )
+                    }
+                    IconButton(onClick = { player.next() }) {
+                        Icon(Icons.Default.SkipNext, contentDescription = "Siguiente", tint = Color.White)
+                    }
+                    IconButton(onClick = onToggleSidePanel) {
+                        Icon(Icons.Default.ExpandLess, contentDescription = "Panel lateral", tint = Color.Gray, modifier = Modifier.size(20.dp))
+                    }
+                }
+                // Progreso fino estilo Android (mini-player)
+                LinearProgressIndicator(
+                    progress = { progress },
+                    modifier = Modifier.fillMaxWidth().height(2.dp),
+                    color = MaterialTheme.colorScheme.primary,
+                    trackColor = Color(0xFF374151),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun AndroidFullPlayerOverlay(
+    player: DesktopPlayer,
+    onCollapse: () -> Unit,
+    onOpenLyrics: () -> Unit,
+    onOpenQueue: () -> Unit,
+) {
+    // FullPlayer estilo Android: caratula grande centrada, titulo/artista, slider con
+    // tiempos, fila principal (shuffle/prev/play/next/repeat), fila secundaria
+    // (rewind/letras/cola/ff) y volumen. Reune TODOS los controles del PlayerBar
+    // anterior sin eliminar ninguno.
     val state by player.state.collectAsState()
     val position by player.positionMs.collectAsState()
     val duration by player.durationMs.collectAsState()
@@ -1303,242 +1550,176 @@ fun PlayerBar(
 
     var isDraggingSlider by remember { mutableStateOf(false) }
     var dragFrac by remember { mutableStateOf(0f) }
+    var lastNonZeroVolume by remember { mutableStateOf(80) }
 
-    Surface(
-        color = Color(0xFF13151D),
-        shadowElevation = 16.dp,
-        modifier = Modifier.fillMaxWidth().border(BorderStroke(1.dp, Color(0x22FFFFFF)))
+    Box(
+        Modifier.fillMaxSize().background(Color(0xE60F1117))
+            .clickable { onCollapse() }
+            .padding(24.dp),
+        contentAlignment = Alignment.Center
     ) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
-            Row(
-                Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
+        Card(
+            modifier = Modifier.widthIn(max = 560.dp).fillMaxWidth()
+                .clickable(enabled = false) {},
+            shape = RoundedCornerShape(24.dp),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF161922)),
+            border = BorderStroke(1.dp, Color(0x33FFFFFF)),
+            elevation = CardDefaults.cardElevation(defaultElevation = 24.dp)
+        ) {
+            Column(
+                Modifier.fillMaxWidth().padding(horizontal = 28.dp, vertical = 20.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Row(
-                    modifier = Modifier
-                        .weight(1f)
-                        .clip(RoundedCornerShape(8.dp))
-                        .clickable { onToggleSidePanel() }
-                        .padding(horizontal = 4.dp, vertical = 2.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    if (thumbBitmap != null) {
-                        Image(
-                            bitmap = thumbBitmap,
-                            contentDescription = null,
-                            modifier = Modifier.size(50.dp).clip(RoundedCornerShape(8.dp)),
-                            contentScale = ContentScale.Crop
-                        )
-                    } else {
-                        Box(
-                            modifier = Modifier.size(50.dp).clip(RoundedCornerShape(8.dp)).background(Color(0xFF282B35)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(Icons.Default.MusicNote, contentDescription = null, tint = Color.Gray)
-                        }
+                // Toolbar superior estilo Android (collapse + badge + cola)
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = onCollapse) {
+                        Icon(Icons.Default.ExpandMore, contentDescription = "Minimizar", tint = Color.White)
                     }
-
-                    Spacer(Modifier.width(12.dp))
-
-                    Column(Modifier.weight(1f)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                current?.title ?: if (state == DesktopPlayerState.IDLE) "Listo para reproducir" else "",
-                                fontWeight = FontWeight.SemiBold,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                color = Color.White
-                            )
-                            val badge = currentFormat ?: current?.audioFormat
-                            if (!badge.isNullOrBlank()) {
-                                Spacer(Modifier.width(6.dp))
-                                Surface(
-                                    color = Color(0xFF2D224C),
-                                    shape = RoundedCornerShape(4.dp),
-                                ) {
-                                    Text(
-                                        badge,
-                                        fontSize = 9.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = Color(0xFFA78BFA),
-                                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
-                                    )
-                                }
+                    Spacer(Modifier.width(4.dp))
+                    Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("REPRODUCIENDO AHORA", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFF9CA3AF))
+                        val badge = currentFormat ?: current?.audioFormat
+                        if (!badge.isNullOrBlank()) {
+                            Spacer(Modifier.height(2.dp))
+                            Surface(color = Color(0xFF2D224C), shape = RoundedCornerShape(4.dp)) {
+                                Text(badge, fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFFA78BFA),
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
                             }
                         }
-                        Text(
-                            current?.artist ?: "YumaPlayer",
-                            color = Color(0xFF9CA3AF),
-                            fontSize = 12.sp,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
                     }
-
+                    IconButton(onClick = onOpenQueue) {
+                        Icon(Icons.AutoMirrored.Filled.QueueMusic, contentDescription = "Cola", tint = Color.Gray)
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                // Caratula grande 1:1 estilo Android FullPlayer
+                Box(
+                    Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(20.dp))
+                        .background(Color(0xFF232634)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (thumbBitmap != null) {
+                        Image(bitmap = thumbBitmap, contentDescription = current?.title,
+                            modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                    } else {
+                        Icon(Icons.Default.MusicNote, contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(88.dp))
+                    }
+                }
+                Spacer(Modifier.height(18.dp))
+                // Titulo + artista + fav (como Android)
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(current?.title ?: "Sin reproducción", fontWeight = FontWeight.Bold, fontSize = 20.sp,
+                            color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(current?.artist ?: "YumaPlayer", fontSize = 14.sp, color = Color(0xFF9CA3AF),
+                            maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
                     if (current != null) {
                         IconButton(onClick = {
                             scope.launch {
                                 DesktopLibraryStore.toggleFavorite(
-                                    StoredSong(
-                                        id = current.id,
-                                        title = current.title,
-                                        artist = current.artist,
-                                        durationMs = current.durationMs,
-                                        thumbnailUrl = current.thumbnailUrl
-                                    )
+                                    StoredSong(id = current.id, title = current.title, artist = current.artist,
+                                        durationMs = current.durationMs, thumbnailUrl = current.thumbnailUrl)
                                 )
                             }
                         }) {
-                            Icon(
-                                if (isFav) Icons.Default.Favorite else Icons.Outlined.FavoriteBorder,
+                            Icon(if (isFav) Icons.Default.Favorite else Icons.Outlined.FavoriteBorder,
                                 contentDescription = "Me gusta",
-                                tint = if (isFav) Color(0xFFEF4444) else Color.Gray
-                            )
+                                tint = if (isFav) Color(0xFFEF4444) else Color.Gray, modifier = Modifier.size(26.dp))
                         }
                     }
                 }
-
-                Column(
-                    modifier = Modifier.weight(1.5f),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.Center
-                    ) {
-                        IconButton(onClick = { player.toggleShuffle() }) {
-                            Icon(
-                                Icons.Default.Shuffle,
-                                contentDescription = "Aleatorio",
-                                tint = if (shuffleEnabled) MaterialTheme.colorScheme.primary else Color.Gray
-                            )
-                        }
-
-                        IconButton(onClick = {
-                            player.seekRelative(-settings.seekDurationSeconds.toDouble())
-                        }) {
-                            Icon(Icons.Default.FastRewind, contentDescription = "-${settings.seekDurationSeconds}s", tint = Color.LightGray)
-                        }
-
-                        IconButton(onClick = { player.prev() }) {
-                            Icon(Icons.Default.SkipPrevious, contentDescription = "Anterior", tint = Color.White)
-                        }
-
-                        IconButton(
-                            onClick = { player.playPause() },
-                            modifier = Modifier.size(46.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary)
-                        ) {
-                            Icon(
-                                if (state == DesktopPlayerState.PLAYING) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                contentDescription = "Play/Pausa",
-                                tint = Color.White
-                            )
-                        }
-
-                        IconButton(onClick = { player.next() }) {
-                            Icon(Icons.Default.SkipNext, contentDescription = "Siguiente", tint = Color.White)
-                        }
-
-                        IconButton(onClick = {
-                            player.seekRelative(settings.seekDurationSeconds.toDouble())
-                        }) {
-                            Icon(Icons.Default.FastForward, contentDescription = "+${settings.seekDurationSeconds}s", tint = Color.LightGray)
-                        }
-
-                        IconButton(onClick = { player.cycleRepeatMode() }) {
-                            Icon(
-                                when (repeatMode) {
-                                    2 -> Icons.Default.RepeatOne
-                                    1 -> Icons.Default.Repeat
-                                    else -> Icons.Default.Repeat
-                                },
-                                contentDescription = "Repetir",
-                                tint = if (repeatMode > 0) MaterialTheme.colorScheme.primary else Color.Gray
-                            )
-                        }
+                Spacer(Modifier.height(8.dp))
+                // Slider con tiempos
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                    val displayPos = if (isDraggingSlider && duration > 0) (dragFrac * duration).toLong() else position
+                    Text(formatTime(displayPos), fontSize = 12.sp, color = Color.Gray, modifier = Modifier.width(44.dp))
+                    val sliderValue = when {
+                        isDraggingSlider -> dragFrac
+                        duration > 0 -> (position.toFloat() / duration.toFloat()).coerceIn(0f, 1f)
+                        else -> 0f
                     }
-
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)
-                    ) {
-                        val displayPos = if (isDraggingSlider && duration > 0) (dragFrac * duration).toLong() else position
-                        Text(formatTime(displayPos), fontSize = 11.sp, color = Color.Gray, modifier = Modifier.width(42.dp))
-
-                        val sliderValue = when {
-                            isDraggingSlider -> dragFrac
-                            duration > 0 -> (position.toFloat() / duration.toFloat()).coerceIn(0f, 1f)
-                            else -> 0f
-                        }
-
-                        Slider(
-                            value = sliderValue,
-                            onValueChange = { frac ->
-                                isDraggingSlider = true
-                                dragFrac = frac
-                            },
-                            onValueChangeFinished = {
-                                isDraggingSlider = false
-                                if (duration > 0) {
-                                    player.seekTo((dragFrac * duration).toLong())
-                                }
-                            },
-                            modifier = Modifier.weight(1f),
-                            colors = SliderDefaults.colors(
-                                thumbColor = MaterialTheme.colorScheme.primary,
-                                activeTrackColor = MaterialTheme.colorScheme.primary,
-                                inactiveTrackColor = Color(0xFF374151)
-                            )
-                        )
-                        Text(formatTime(duration), fontSize = 11.sp, color = Color.Gray, modifier = Modifier.width(42.dp))
-                    }
-                }
-
-                Row(
-                    modifier = Modifier.weight(0.8f),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.End
-                ) {
-                    IconButton(onClick = onOpenLyrics) {
-                        Icon(Icons.Default.Mic, contentDescription = "Letras", tint = Color.Gray)
-                    }
-
-                    IconButton(onClick = onOpenQueue) {
-                        Icon(Icons.AutoMirrored.Filled.QueueMusic, contentDescription = "Cola", tint = Color.Gray)
-                    }
-
-                    var lastNonZeroVolume by remember { mutableStateOf(80) }
-
-                    IconButton(onClick = {
-                        if (volume > 0) {
-                            lastNonZeroVolume = volume
-                            player.setVolume(0)
-                        } else {
-                            player.setVolume(if (lastNonZeroVolume > 0) lastNonZeroVolume else 80)
-                        }
-                    }) {
-                        Icon(
-                            imageVector = when {
-                                volume == 0 -> Icons.AutoMirrored.Filled.VolumeMute
-                                volume <= 50 -> Icons.AutoMirrored.Filled.VolumeDown
-                                else -> Icons.AutoMirrored.Filled.VolumeUp
-                            },
-                            contentDescription = if (volume == 0) "Activar sonido" else "Silenciar",
-                            tint = if (volume == 0) Color.Red else Color.LightGray,
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
-                    Spacer(Modifier.width(6.dp))
                     Slider(
-                        value = volume / 100f,
-                        onValueChange = { player.setVolume((it * 100).toInt()) },
-                        modifier = Modifier.width(90.dp),
+                        value = sliderValue,
+                        onValueChange = { frac -> isDraggingSlider = true; dragFrac = frac },
+                        onValueChangeFinished = {
+                            isDraggingSlider = false
+                            if (duration > 0) player.seekTo((dragFrac * duration).toLong())
+                        },
+                        modifier = Modifier.weight(1f),
                         colors = SliderDefaults.colors(
-                            thumbColor = Color.White,
-                            activeTrackColor = Color(0xFFA78BFA),
+                            thumbColor = MaterialTheme.colorScheme.primary,
+                            activeTrackColor = MaterialTheme.colorScheme.primary,
                             inactiveTrackColor = Color(0xFF374151)
                         )
                     )
+                    Text(formatTime(duration), fontSize = 12.sp, color = Color.Gray, modifier = Modifier.width(44.dp))
+                }
+                // Controles principales (todos preservados)
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
+                    IconButton(onClick = { player.toggleShuffle() }) {
+                        Icon(Icons.Default.Shuffle, contentDescription = "Aleatorio",
+                            tint = if (shuffleEnabled) MaterialTheme.colorScheme.primary else Color.Gray, modifier = Modifier.size(22.dp))
+                    }
+                    IconButton(onClick = { player.prev() }) {
+                        Icon(Icons.Default.SkipPrevious, contentDescription = "Anterior", tint = Color.White, modifier = Modifier.size(36.dp))
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    IconButton(
+                        onClick = { player.playPause() },
+                        modifier = Modifier.size(64.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary)
+                    ) {
+                        Icon(if (state == DesktopPlayerState.PLAYING) Icons.Default.Pause else Icons.Default.PlayArrow,
+                            contentDescription = "Play/Pausa", tint = Color.White, modifier = Modifier.size(32.dp))
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    IconButton(onClick = { player.next() }) {
+                        Icon(Icons.Default.SkipNext, contentDescription = "Siguiente", tint = Color.White, modifier = Modifier.size(36.dp))
+                    }
+                    IconButton(onClick = { player.cycleRepeatMode() }) {
+                        Icon(
+                            when (repeatMode) { 2 -> Icons.Default.RepeatOne; 1 -> Icons.Default.Repeat; else -> Icons.Default.Repeat },
+                            contentDescription = "Repetir",
+                            tint = if (repeatMode > 0) MaterialTheme.colorScheme.primary else Color.Gray, modifier = Modifier.size(22.dp))
+                    }
+                }
+                Spacer(Modifier.height(4.dp))
+                // Fila secundaria: rewind, letras, ff + volumen/mute (nada eliminado, solo reubicado)
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                    IconButton(onClick = { player.seekRelative(-settings.seekDurationSeconds.toDouble()) }) {
+                        Icon(Icons.Default.FastRewind, contentDescription = "-${settings.seekDurationSeconds}s", tint = Color.LightGray)
+                    }
+                    IconButton(onClick = onOpenLyrics) {
+                        Icon(Icons.Default.Mic, contentDescription = "Letras", tint = Color.Gray)
+                    }
+                    IconButton(onClick = { player.seekRelative(settings.seekDurationSeconds.toDouble()) }) {
+                        Icon(Icons.Default.FastForward, contentDescription = "+${settings.seekDurationSeconds}s", tint = Color.LightGray)
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(onClick = {
+                            if (volume > 0) { lastNonZeroVolume = volume; player.setVolume(0) }
+                            else player.setVolume(if (lastNonZeroVolume > 0) lastNonZeroVolume else 80)
+                        }) {
+                            Icon(
+                                imageVector = when {
+                                    volume == 0 -> Icons.AutoMirrored.Filled.VolumeMute
+                                    volume <= 50 -> Icons.AutoMirrored.Filled.VolumeDown
+                                    else -> Icons.AutoMirrored.Filled.VolumeUp
+                                },
+                                contentDescription = "Volumen",
+                                tint = if (volume == 0) Color.Red else Color.LightGray, modifier = Modifier.size(20.dp)
+                            )
+                        }
+                        Slider(
+                            value = volume / 100f,
+                            onValueChange = { player.setVolume((it * 100).toInt()) },
+                            modifier = Modifier.width(90.dp),
+                            colors = SliderDefaults.colors(
+                                thumbColor = Color.White, activeTrackColor = Color(0xFFA78BFA),
+                                inactiveTrackColor = Color(0xFF374151))
+                        )
+                    }
                 }
             }
         }

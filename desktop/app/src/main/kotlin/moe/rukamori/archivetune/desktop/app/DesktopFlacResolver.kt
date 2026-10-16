@@ -18,6 +18,12 @@ import java.util.concurrent.TimeUnit
 object DesktopFlacResolver {
     private val kvCache = ConcurrentHashMap<String, String>()
 
+    // Cache de streams FLAC resueltos (0ms en re-escuchas) + negative cache (fail rapido)
+    private val streamCache = ConcurrentHashMap<String, Pair<ResolvedAudioStream, Long>>()
+    private val missCache = ConcurrentHashMap<String, Long>()
+    private const val CACHE_TTL_MS = 5 * 60 * 60 * 1000L
+    private const val MISS_TTL_MS = 30 * 60 * 1000L
+
     private val flacConfig = object : FlacConfig {
         override suspend fun qbdlxEnabled(): Boolean =
             DesktopSettingsStore.settings.value.playbackSource == "FLAC"
@@ -46,8 +52,8 @@ object DesktopFlacResolver {
     )
 
     private val httpClient = OkHttpClient.Builder()
-        .connectTimeout(5, TimeUnit.SECONDS)
-        .readTimeout(5, TimeUnit.SECONDS)
+        .connectTimeout(4, TimeUnit.SECONDS)
+        .readTimeout(4, TimeUnit.SECONDS)
         .build()
 
     private val apiClient = QbdlxApiClient(
@@ -72,11 +78,21 @@ object DesktopFlacResolver {
         durationMs: Long = 0L,
         quality: String = "HI_RES"
     ): ResolvedAudioStream? {
+        val key = "${title.lowercase()}|${artist.lowercase()}|$quality"
+        streamCache[key]?.let { (cached, ts) ->
+            if (System.currentTimeMillis() - ts < CACHE_TTL_MS) return cached
+            else streamCache.remove(key)
+        }
+        missCache[key]?.let { ts ->
+            if (System.currentTimeMillis() - ts < MISS_TTL_MS) return null
+            else missCache.remove(key)
+        }
+
         val s = DesktopSettingsStore.settings.value
         val hasSecret = s.qobuzAppSecret.trim().isNotBlank()
         val hasToken = s.qobuzUserAuthToken.trim().isNotBlank()
         if (!hasSecret && !hasToken) {
-            // No credentials configured: do not waste network time or cause timeout delay
+            // Sin credenciales: fallo inmediato sin red (no penaliza a YT en la carrera)
             return null
         }
 
@@ -92,16 +108,20 @@ object DesktopFlacResolver {
             durationMs = if (durationMs > 0) durationMs else null
         )
 
-        val stream = withTimeoutOrNull(2500L) {
+        val stream = withTimeoutOrNull(2000L) {
             runCatching { resolver.resolve(query, formatId) }.getOrNull()
-        } ?: return null
+        }
+        if (stream == null) {
+            missCache[key] = System.currentTimeMillis()
+            return null
+        }
 
         val bitDepth = stream.bitsPerSample ?: 24
         val sampleRateKhz = (stream.sampleRateHz ?: 96000) / 1000f
         val sampleRateStr = if (sampleRateKhz % 1f == 0f) "${sampleRateKhz.toInt()} kHz" else "%.1f kHz".format(sampleRateKhz)
         val formatLabel = "FLAC • ${bitDepth}-bit $sampleRateStr"
 
-        return ResolvedAudioStream(
+        val resolved = ResolvedAudioStream(
             url = stream.url,
             mimeType = "audio/flac",
             isOpus = false,
@@ -109,5 +129,12 @@ object DesktopFlacResolver {
             clientName = "QOBUZ_FLAC",
             formatLabel = formatLabel
         )
+        streamCache[key] = resolved to System.currentTimeMillis()
+        // LRU simple: cap a 200 entradas
+        if (streamCache.size > 200) {
+            val oldest = streamCache.entries.minByOrNull { it.value.second }?.key
+            if (oldest != null) streamCache.remove(oldest)
+        }
+        return resolved
     }
 }
