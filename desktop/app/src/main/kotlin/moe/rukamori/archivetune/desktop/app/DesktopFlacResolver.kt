@@ -22,7 +22,7 @@ object DesktopFlacResolver {
     private val streamCache = ConcurrentHashMap<String, Pair<ResolvedAudioStream, Long>>()
     private val missCache = ConcurrentHashMap<String, Long>()
     private const val CACHE_TTL_MS = 2 * 60 * 60 * 1000L
-    private const val MISS_TTL_MS = 30 * 60 * 1000L
+    private const val MISS_TTL_MS = 10 * 60 * 1000L
 
     /** Las URLs de streaming traen ?expire=<unix>; no reusar una caducada (provocaria 403). */
     private fun isUrlExpired(url: String): Boolean {
@@ -42,13 +42,18 @@ object DesktopFlacResolver {
             DesktopSettingsStore.settings.value.playbackSource == "FLAC"
 
         override suspend fun qbdlxAppId(): String =
-            DesktopSettingsStore.settings.value.qobuzAppId.trim().ifEmpty { "798273057" }
+            DesktopSettingsStore.settings.value.qobuzAppId.trim()
+                .ifEmpty { DesktopLosslessTokens.QOBUZ_APP_ID }
 
+        // Fallback a credenciales integradas (como hacía la app Android):
+        // el usuario puede sobrescribirlas en Ajustes si las suyas fallan.
         override suspend fun qbdlxAppSecret(): String =
             DesktopSettingsStore.settings.value.qobuzAppSecret.trim()
+                .ifEmpty { DesktopLosslessTokens.QOBUZ_APP_SECRET }
 
         override suspend fun qbdlxTokenPool(): String =
             DesktopSettingsStore.settings.value.qobuzUserAuthToken.trim()
+                .ifEmpty { DesktopLosslessTokens.QOBUZ_USER_AUTH_TOKEN }
     }
 
     private val flacKvStore = object : FlacKvStore {
@@ -102,10 +107,13 @@ object DesktopFlacResolver {
         }
 
         val s = DesktopSettingsStore.settings.value
-        val hasSecret = s.qobuzAppSecret.trim().isNotBlank()
-        val hasToken = s.qobuzUserAuthToken.trim().isNotBlank()
-        if (!hasSecret && !hasToken) {
-            // Sin credenciales: fallo inmediato sin red (no penaliza a YT en la carrera)
+        // Credenciales efectivas: las del usuario o las integradas (fallback).
+        val effectiveSecret = s.qobuzAppSecret.trim()
+            .ifEmpty { DesktopLosslessTokens.QOBUZ_APP_SECRET }
+        val effectiveToken = s.qobuzUserAuthToken.trim()
+            .ifEmpty { DesktopLosslessTokens.QOBUZ_USER_AUTH_TOKEN }
+        if (effectiveSecret.isBlank() && effectiveToken.isBlank()) {
+            // Sin credenciales de ningun tipo: fallo inmediato sin red
             return null
         }
 
@@ -121,8 +129,14 @@ object DesktopFlacResolver {
             durationMs = if (durationMs > 0) durationMs else null
         )
 
-        val stream = withTimeoutOrNull(1500L) {
-            runCatching { resolver.resolve(query, formatId) }.getOrNull()
+        // Intenta la calidad pedida y, si la cuenta no la soporta (p.ej. Hi-Res sin
+        // plan Studio), baja a CD (6) en vez de rendirse y caer a YouTube.
+        var stream: moe.rukamori.archivetune.flaccore.streaming.FlacStreamUrl? = null
+        for (candidateFormat in listOf(formatId, 6).distinct()) {
+            stream = withTimeoutOrNull(3000L) {
+                runCatching { resolver.resolve(query, candidateFormat) }.getOrNull()
+            }
+            if (stream != null) break
         }
         if (stream == null) {
             missCache[key] = System.currentTimeMillis()

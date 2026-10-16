@@ -904,51 +904,31 @@ fun PlaybackSettingsScreen(
                 Column(Modifier.padding(18.dp)) {
                     Text("Credenciales Qobuz Personalizadas", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color.White)
                     Text(
-                        "Necesarias para FLAC: sin User Auth Token, la busqueda FLAC queda desactivada " +
-                            "y las pistas se reproducen desde YouTube (fallback).",
+                        "Opcional: sobrescribe las credenciales integradas. Si dejas los campos vacios, " +
+                            "se usan las que trae la app (las mismas que la version Android).",
                         color = Color.Gray, fontSize = 12.sp
                     )
                     Spacer(Modifier.height(12.dp))
 
-                    // Diagnostico visible: el FLAC usa el motor qbdlx, que exige un token
-                    // (pool) para consultar Qobuz. Sin el, todo cae al fallback de YouTube.
-                    if (settings.qobuzUserAuthToken.isBlank()) {
+                    // El motor FLAC (qbdlx) trae credenciales integradas como fallback,
+                    // asi que sin configurar nada igual funciona. Avisamos de ello.
+                    if (settings.qobuzUserAuthToken.isBlank() || settings.qobuzAppSecret.isBlank()) {
                         Card(
-                            colors = CardDefaults.cardColors(containerColor = Color(0xFF3B1D1D)),
+                            colors = CardDefaults.cardColors(containerColor = Color(0xFF1D2E3B)),
                             shape = RoundedCornerShape(10.dp),
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Column(Modifier.padding(12.dp)) {
                                 Text(
-                                    "FLAC no configurado: falta el User Auth Token",
-                                    fontWeight = FontWeight.Bold, color = Color(0xFFFFB4AB), fontSize = 13.sp
+                                    "Usando credenciales integradas",
+                                    fontWeight = FontWeight.Bold, color = Color(0xFF81D4FA), fontSize = 13.sp
                                 )
                                 Spacer(Modifier.height(2.dp))
                                 Text(
-                                    "Sin token no hay catalogo Qobuz: cada cancion se reproduce vía YouTube. " +
-                                        "Copia las mismas credenciales que usas en YumaPlayer de Android " +
-                                        "(Ajustes → Integracion Lossless) o pega un token nuevo.",
-                                    color = Color(0xFFEF9A9A), fontSize = 12.sp
-                                )
-                            }
-                        }
-                        Spacer(Modifier.height(12.dp))
-                    } else if (settings.qobuzAppSecret.isBlank()) {
-                        Card(
-                            colors = CardDefaults.cardColors(containerColor = Color(0xFF3B2F1D)),
-                            shape = RoundedCornerShape(10.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Column(Modifier.padding(12.dp)) {
-                                Text(
-                                    "Falta el App Secret",
-                                    fontWeight = FontWeight.Bold, color = Color(0xFFFFD180), fontSize = 13.sp
-                                )
-                                Spacer(Modifier.height(2.dp))
-                                Text(
-                                    "Con el token pero sin App Secret, Qobuz puede degradar el audio a " +
-                                        "previews de 30 segundos. Pega tambien el App Secret.",
-                                    color = Color(0xFFFFCC80), fontSize = 12.sp
+                                    "Son las mismas que trae la app de Android. Si el FLAC no encuentra " +
+                                        "una pista (o suena en previews de 30 s), pega aqui tu propio " +
+                                        "App Secret y User Auth Token para reemplazarlas.",
+                                    color = Color(0xFFB0BEC5), fontSize = 12.sp
                                 )
                             }
                         }
