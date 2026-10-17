@@ -640,6 +640,36 @@ private fun TrackCard(
     track: SpotifyTrack,
     onPlay: () -> Unit
 ) {
+    // Prefetch especulativo (como StreamPrefetcher en Android): al verse la tarjeta
+    // pre-resolvemos el match Spotify->YouTube y la URL del stream, para que el click
+    // sea un acierto de cache (0 ms) en vez de una busqueda + resolucion.
+    LaunchedEffect(track.id) {
+        runCatching {
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                val matchStartedAt = System.currentTimeMillis()
+                val matched = DesktopSpotifyStore.matchSpotifyTrackToYouTube(track)
+                DesktopDiag.log(
+                    "prefetch", System.currentTimeMillis() - matchStartedAt,
+                    "home match ${track.name.take(28)}"
+                )
+                if (matched != null) {
+                    val s = DesktopSettingsStore.settings.value
+                    DesktopStreamResolver.prefetch(
+                        videoId = matched.id,
+                        title = matched.title,
+                        artist = matched.artists.joinToString(", ") { it.name },
+                        durationMs = (matched.duration ?: 0) * 1000L,
+                        playbackSource = s.playbackSource,
+                        flacQuality = s.flacQuality,
+                        preferredQuality = s.audioQuality,
+                        preferredClientName = s.streamingClient,
+                        flacFallbackToYoutube = s.flacFallbackToYoutube
+                    )
+                }
+            }
+        }
+    }
+
     Card(
         modifier = Modifier
             .width(140.dp)

@@ -771,6 +771,7 @@ fun PlaybackSettingsScreen(
     var appSecret by remember { mutableStateOf(settings.qobuzAppSecret) }
     var userToken by remember { mutableStateOf(settings.qobuzUserAuthToken) }
     var tokensSaved by remember { mutableStateOf(false) }
+    var tokenTestResult by remember { mutableStateOf<String?>(null) }
 
     Column(
         modifier = Modifier
@@ -972,6 +973,11 @@ fun PlaybackSettingsScreen(
                                         )
                                     }
                                     tokensSaved = true
+                                    tokenTestResult = "Comprobando con Qobuz..."
+                                    // Si el usuario pega credenciales nuevas hay que probarlas
+                                    // contra el pool real (el integrado puede estar caducado).
+                                    val error = DesktopFlacResolver.testCredentials()
+                                    tokenTestResult = error ?: "Correcto: Qobuz acepta las credenciales."
                                 }
                             },
                             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFBB86FC))
@@ -983,6 +989,31 @@ fun PlaybackSettingsScreen(
                             Text("¡Credenciales guardadas!", color = Color(0xFF69F0AE), fontSize = 12.sp)
                         }
                     }
+
+                    tokenTestResult?.let { result ->
+                        Spacer(Modifier.height(10.dp))
+                        val ok = result.startsWith("Correcto")
+                        Card(
+                            colors = CardDefaults.cardColors(
+                                containerColor = if (ok) Color(0xFF14361F) else Color(0xFF3B1D1D)
+                            ),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                result,
+                                fontSize = 12.sp,
+                                color = if (ok) Color(0xFF69F0AE) else Color(0xFFEF4444),
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                            )
+                        }
+                    }
+
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        "Diagnostico de arranque: ${DesktopDiag.path()}",
+                        color = Color.Gray, fontSize = 11.sp
+                    )
                 }
             }
             Spacer(Modifier.height(16.dp))

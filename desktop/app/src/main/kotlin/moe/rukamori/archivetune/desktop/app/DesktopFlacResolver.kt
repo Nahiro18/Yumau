@@ -1,5 +1,7 @@
 package moe.rukamori.archivetune.desktop.app
 
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import moe.rukamori.archivetune.flaccore.FlacConfig
 import moe.rukamori.archivetune.flaccore.FlacKvStore
@@ -11,7 +13,9 @@ import moe.rukamori.archivetune.flaccore.qbdlx.QbdlxQobuzSource
 import moe.rukamori.archivetune.flaccore.qbdlx.QbdlxSigner
 import moe.rukamori.archivetune.flaccore.ratelimit.AggregatorRateLimiter
 import moe.rukamori.archivetune.flaccore.streaming.QbdlxStreamResolver
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
+import okhttp3.Request
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
@@ -68,6 +72,49 @@ object DesktopFlacResolver {
         kvStore = flacKvStore,
         poolProvider = QbdlxPoolProvider { flacConfig.qbdlxTokenPool() }
     )
+
+    /**
+     * Comprueba las credenciales EFECTIVAS (las del usuario o las integradas) contra
+     * la API de Qobuz. Devuelve null si funcionan, o el motivo del fallo, para que
+     * Ajustes pueda avisar sin tener que reproducir una cancion.
+     */
+    suspend fun testCredentials(): String? = withContext(Dispatchers.IO) {
+        val s = DesktopSettingsStore.settings.value
+        val appId = s.qobuzAppId.trim().ifEmpty { DesktopLosslessTokens.QOBUZ_APP_ID }
+        val token = s.qobuzUserAuthToken.trim().ifEmpty { DesktopLosslessTokens.QOBUZ_USER_AUTH_TOKEN }
+        if (token.isBlank()) return@withContext "No hay ningun User Auth Token configurado"
+
+        val url = "https://www.qobuz.com/api.json/0.2/catalog/search".toHttpUrl().newBuilder()
+            .addQueryParameter("query", "daft punk")
+            .addQueryParameter("type", "tracks")
+            .addQueryParameter("limit", "1")
+            .addQueryParameter("app_id", appId)
+            .build()
+        try {
+            val request = Request.Builder()
+                .url(url)
+                .header("X-App-Id", appId)
+                .header("X-User-Auth-Token", token)
+                .header("Accept", "application/json")
+                .header("User-Agent", QOBUZ_UA)
+                .get()
+                .build()
+            httpClient.newCall(request).execute().use { response ->
+                response.body?.string()
+                when {
+                    response.isSuccessful -> null
+                    response.code == 401 -> "El token no es valido o esta caducado (401). Pega uno nuevo en User Auth Token."
+                    response.code == 403 -> "Token rechazado por Qobuz (403). Puede estar baneado o ser de otra region."
+                    else -> "Qobuz respondio HTTP ${response.code}"
+                }
+            }
+        } catch (e: Exception) {
+            "No se pudo contactar Qobuz: ${e.message ?: e::class.java.simpleName}"
+        }
+    }
+
+    private const val QOBUZ_UA =
+        "Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Mobile Safari/537.36"
 
     private val httpClient = OkHttpClient.Builder()
         .connectTimeout(4, TimeUnit.SECONDS)

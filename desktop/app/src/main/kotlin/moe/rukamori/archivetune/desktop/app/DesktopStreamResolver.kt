@@ -60,6 +60,36 @@ object DesktopStreamResolver {
     // 2h: las URLs de googlevideo caducan y reusar una expirada provoca 403 y esperas largas
     private const val CACHE_TTL_MS = 2 * 60 * 60 * 1000L
 
+    // --- Motor de descifrado (parametro "n" de YouTube) ---
+    // Todas las URLs de audio hoy traen "n", asi que sin desofuscar el audio puede
+    // llegar throttled. Pero desofuscar con el motor FRIO cuesta segundos (descarga
+    // del player + compilacion) y, como lo cancelabamos, nunca se guardaba el plan:
+    // se repetia en cada tema. Ahora el motor se calienta UNA vez al arrancar y
+    // solo se usa cuando ya esta listo ( transformational en milisegundos).
+    private val cipherWarmStarted = java.util.concurrent.atomic.AtomicBoolean(false)
+    private val cipherFastReady = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /**
+     * Descarga y compila el plan del descifrador en segundo plano. Idempotente y
+     * sin coste para el usuario: se llama al arrancar la app y de forma defensiva
+     * la primera vez que hace falta.
+     */
+    fun warmUpCipher() {
+        if (!cipherWarmStarted.compareAndSet(false, true)) return
+        kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
+            val start = System.currentTimeMillis()
+            runCatching {
+                withTimeoutOrNull(60_000L) {
+                    moe.rukamori.archivetune.obfuscator.MoriCipherRuntime.refresh(force = false)
+                }
+            }
+            // Tras el warmup el plan queda en memoria (y en disco): los transforms
+            // posteriores son milisegundos.
+            cipherFastReady.set(true)
+            DesktopDiag.log("cipher-warmup", System.currentTimeMillis() - start)
+        }
+    }
+
     private val jsonLenient = Json { ignoreUnknownKeys = true; prettyPrint = false }
     private val diskCacheFile: File by lazy {
         File(System.getProperty("user.home"), ".config/YumaPlayer/stream_cache.json").apply {
@@ -217,11 +247,15 @@ object DesktopStreamResolver {
         preferredClientName: String = "ANDROID_VR",
         flacFallbackToYoutube: Boolean = true,
     ): ResolvedAudioStream? = withContext(Dispatchers.IO) {
+        val startedAt = System.currentTimeMillis()
         loadDiskCacheIfNeeded()
         val key = cacheKey(videoId, playbackSource, flacQuality, preferredQuality)
 
         streamCache[key]?.let { (cached, ts) ->
-            if (!isStale(cached, ts)) return@withContext cached
+            if (!isStale(cached, ts)) {
+                DesktopDiag.log("resolve", System.currentTimeMillis() - startedAt, "cache=mem src=$playbackSource")
+                return@withContext cached
+            }
             streamCache.remove(key)
         }
         diskCache[key]?.let { disk ->
@@ -232,6 +266,7 @@ object DesktopStreamResolver {
                     clientName = disk.clientName, formatLabel = disk.formatLabel
                 )
                 streamCache[key] = mem to disk.timestamp
+                DesktopDiag.log("resolve", System.currentTimeMillis() - startedAt, "cache=disk src=$playbackSource")
                 return@withContext mem
             } else {
                 diskCache.remove(key)
@@ -245,8 +280,13 @@ object DesktopStreamResolver {
 
         if (resolved != null && resolved.url.isNotBlank()) {
             putCache(key, resolved)
+            DesktopDiag.log(
+                "resolve", System.currentTimeMillis() - startedAt,
+                "network src=$playbackSource client=${resolved.clientName} fmt=${resolved.formatLabel}"
+            )
             resolved
         } else {
+            DesktopDiag.log("resolve", System.currentTimeMillis() - startedAt, "FAILED src=$playbackSource")
             null
         }
     }
@@ -263,8 +303,13 @@ object DesktopStreamResolver {
         preferredClientName: String,
     ): ResolvedAudioStream? {
         if (title.isNotBlank()) {
+            val flacStartedAt = System.currentTimeMillis()
             val flac = DesktopFlacResolver.resolve(
                 title = title, artist = artist, durationMs = durationMs, quality = flacQuality
+            )
+            DesktopDiag.log(
+                "flac", System.currentTimeMillis() - flacStartedAt,
+                if (flac != null) "hit ${flac.formatLabel}" else "miss (fallback=$fallbackToYoutube)"
             )
             if (flac != null) return flac
         }
@@ -346,14 +391,31 @@ object DesktopStreamResolver {
             val candidate = selectFormat(formats, preferredQuality) ?: formats.firstOrNull() ?: return null
 
             val direct = candidate.url
-            // FAST PATH: URL directa. PERO si trae el parametro "n" (throttling de YouTube),
-            // hay que deofuscarlo o el audio cargara a velocidad ridicula (minutos).
-            // El runtime de cifrado ya esta calentado en segundo plano, asi que es rapido.
+            val cipherReady = cipherFastReady.get()
             val streamUrl = when {
+                // URL directa sin 'n': se usa tal cual (0 esperas).
                 !direct.isNullOrBlank() && !hasNParam(direct) -> direct
-                !direct.isNullOrBlank() -> withTimeoutOrNull(1500L) {
-                    NewPipeUtils.getStreamUrl(candidate, videoId, client).getOrNull()
-                } ?: direct
+                // Con 'n' (TODAS las de YouTube hoy): desofuscar SOLO con el motor caliente.
+                // Con el motor frio costaria segundos por tema y se cancelaria, dejando
+                // el player a medio descargar cada vez.
+                !direct.isNullOrBlank() && cipherReady -> {
+                    val t0 = System.currentTimeMillis()
+                    val transformed = withTimeoutOrNull(1200L) {
+                        NewPipeUtils.getStreamUrl(candidate, videoId, client).getOrNull()
+                    }
+                    if (transformed.isNullOrBlank()) {
+                        cipherFastReady.set(false)
+                        warmUpCipher()
+                    } else {
+                        DesktopDiag.log("cipher-n", System.currentTimeMillis() - t0, "ok")
+                    }
+                    transformed ?: direct
+                }
+                !direct.isNullOrBlank() -> {
+                    warmUpCipher()
+                    direct
+                }
+                // Sin URL directa: hay que descifrar por obligacion (con timeout).
                 else -> withTimeoutOrNull(1800L) {
                     NewPipeUtils.getStreamUrl(candidate, videoId, client).getOrNull()
                 }

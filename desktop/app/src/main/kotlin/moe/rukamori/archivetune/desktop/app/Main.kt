@@ -209,11 +209,13 @@ fun playSpotifyTrack(
     activeSpotifyMatchJob?.cancel()
     activeSpotifyMatchJob = scope.launch {
         // Match Spotify->YT con timeout corto: si tarda, no dejamos al usuario esperando.
+        val matchStartedAt = System.currentTimeMillis()
         val ytSong = withContext(Dispatchers.IO) {
             kotlinx.coroutines.withTimeoutOrNull(6000L) {
                 DesktopSpotifyStore.matchSpotifyTrackToYouTube(track)
             }
         }
+        DesktopDiag.log("match", System.currentTimeMillis() - matchStartedAt, "spotify-track")
         if (ytSong != null) {
             playTrack(
                 scope = scope,
@@ -271,9 +273,12 @@ fun main() {
         )
     }
 
-    // Warm up YouTube session credentials in background for instant stream resolution
+    // Warm up de YouTube + motor de descifrado, TODO en segundo plano.
+    // Antes el descifrado se descargaba (player JS) en medio de la primera cancion y se
+    // cancelaba a los 1.5s, asi que el plan nunca se guardaba y se repetia en cada tema.
     CoroutineScope(Dispatchers.IO).launch {
         runCatching { YouTube.visitorData() }
+        DesktopStreamResolver.warmUpCipher()
     }
 
     val player = DesktopPlayer()
@@ -281,7 +286,9 @@ fun main() {
         val s = DesktopSettingsStore.settings.value
         var actualVideoId = mediaItem.id
         if (actualVideoId.startsWith("spt:") || actualVideoId.length == 22) {
+            val matchStartedAt = System.currentTimeMillis()
             val matched = DesktopSpotifyStore.matchTitleArtistToYouTube(mediaItem.title, mediaItem.artist)
+            DesktopDiag.log("match", System.currentTimeMillis() - matchStartedAt, "spotify->yt")
             if (matched != null) {
                 actualVideoId = matched.id
             }
@@ -309,6 +316,10 @@ fun main() {
     // invalidamos la cache de ese tema para que el siguiente intento resuelva fresco.
     player.onStreamError = { item ->
         DesktopStreamResolver.invalidate(item.id)
+    }
+    // Metrica real de arranque: ms desde loadfile hasta el primer sample de audio.
+    player.onPlaybackDiag = { ms ->
+        DesktopDiag.log("primer-audio", ms, "loadfile -> primer sample en mpv")
     }
     try {
         player.init()

@@ -149,27 +149,34 @@ class DesktopPlayer(
             }
         }
 
-        // Active poller to guarantee real-time seekbar progress even if IPC events stall
+        // Sonda activa para el progreso en tiempo real. Solo lee "time-pos" (la
+        // duracion ya llega por observe_property), para no gastar round-trips IPC.
         scope.launch {
             while (isActive) {
-                delay(250)
+                delay(400)
                 if (_state.value == DesktopPlayerState.PLAYING) {
                     runCatching {
                         val posEl = mpv.getProperty("time-pos")
                         val posSec = posEl?.jsonPrimitiveDoubleOrNull()
                         if (posSec != null && posSec >= 0) {
                             _positionMs.value = (posSec * 1000).toLong()
-                        }
-                        val durEl = mpv.getProperty("duration")
-                        val durSec = durEl?.jsonPrimitiveDoubleOrNull()
-                        if (durSec != null && durSec > 0) {
-                            _durationMs.value = (durSec * 1000).toLong()
+                            // Primer sample de audio => metricica real de arranque.
+                            val startedAt = pendingLoadStartedAt.get()
+                            if (startedAt > 0L && posSec > 0.2 && firstAudioLogged.compareAndSet(false, true)) {
+                                onPlaybackDiag?.invoke(System.currentTimeMillis() - startedAt)
+                            }
                         }
                     }
                 }
             }
         }
     }
+
+    /** Callback de diagnostico: recibe los ms desde loadfile hasta el primer audio. */
+    var onPlaybackDiag: ((Long) -> Unit)? = null
+
+    private val pendingLoadStartedAt = java.util.concurrent.atomic.AtomicLong(0L)
+    private val firstAudioLogged = java.util.concurrent.atomic.AtomicBoolean(false)
 
     private fun kotlinx.serialization.json.JsonElement?.jsonPrimitiveDoubleOrNull(): Double? =
         (this as? kotlinx.serialization.json.JsonPrimitive)?.content?.toDoubleOrNull()
@@ -271,6 +278,8 @@ class DesktopPlayer(
                 }
                 // loadfile fire-and-forget: no bloqueamos 10s esperando reply de mpv.
                 // El audio arranca en background mientras la UI ya muestra PLAYING.
+                pendingLoadStartedAt.set(System.currentTimeMillis())
+                firstAudioLogged.set(false)
                 mpv.commandAsync(listOf("loadfile", resolvedItem.uri, "replace"))
                 mpv.commandAsync(listOf("set_property", "pause", false))
                 _state.value = DesktopPlayerState.PLAYING
