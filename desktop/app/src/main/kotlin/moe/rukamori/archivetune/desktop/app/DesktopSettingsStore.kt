@@ -19,6 +19,7 @@ data class DesktopAppSettings(
     val qobuzAppId: String = "",
     val qobuzAppSecret: String = "",
     val qobuzUserAuthToken: String = "",
+    val youtubeCookie: String = "", // cabecera Cookie de youtube.com (supera el bloqueo antibot)
     val audioQuality: String = "HIGH", // HIGH (Opus 160kbps), MEDIUM (128kbps), LOW (50-70kbps)
     val streamingClient: String = "ANDROID_VR", // ANDROID_VR, IOS, WEB_REMIX
     val volumeNormalization: Boolean = true,
@@ -153,4 +154,37 @@ object DesktopSettingsStore {
             false
         }
     }
+}
+
+/**
+ * Convierte lo que pegue el usuario (cabecera "Cookie: a=b; c=d" o un cookies.txt en
+ * formato Netscape) en una cabecera Cookie valida para youtube.com. Devuelve null si
+ * no hay ninguna cookie util.
+ */
+fun buildYouTubeCookieHeader(raw: String): String? {
+    val text = raw.trim()
+    if (text.isEmpty()) return null
+    val lines = text.lines().map { it.trim() }.filter { it.isNotEmpty() }
+    val netscape = lines.any { line -> line.count { it == '\t' } >= 6 }
+    val pairs = if (netscape) {
+        lines.mapNotNull { line ->
+            val clean = line.removePrefix("#HttpOnly_")
+            if (clean.startsWith("#")) return@mapNotNull null
+            val parts = clean.split('\t')
+            if (parts.size < 7) return@mapNotNull null
+            val domain = parts[0]
+            if (!domain.contains("youtube.com") && !domain.contains("google.com")) return@mapNotNull null
+            "${parts[5].trim()}=${parts[6].trim()}"
+        }
+    } else {
+        lines
+            .flatMap { line -> line.replace(Regex("(?i)^cookie:\\s*"), "").split(';') }
+            .map { it.trim() }
+            .filter { it.contains('=') }
+    }
+    val header = pairs
+        .filter { it.substringBefore('=').isNotBlank() }
+        .distinct()
+        .joinToString("; ")
+    return header.ifBlank { null }
 }

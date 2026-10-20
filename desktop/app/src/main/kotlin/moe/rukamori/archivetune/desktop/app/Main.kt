@@ -126,13 +126,28 @@ fun playTrack(
                 )
             }
         }
+        val hint = if (s.playbackSource == "FLAC" && !s.flacFallbackToYoutube) {
+            null
+        } else {
+            DesktopStreamResolver.lastFailureHint
+        }
         DesktopDiag.log(
             "play", System.currentTimeMillis() - resolveStartedAt,
-            if (stream != null) "ok ${stream.clientName}" else "sin stream"
+            if (stream != null) "ok ${stream.clientName}" else "sin stream hint=$hint"
         )
         if (stream == null) {
-            val fuente = if (s.playbackSource == "FLAC") "FLAC ni YouTube" else "YouTube Music"
-            player.markError("No disponible en $fuente: \"$title\". Revisa Ajustes o la conexion.")
+            val message = when (hint) {
+                DesktopStreamResolver.HINT_LOGIN ->
+                    "YouTube pide iniciar sesión para \"$title\" (bloqueo antibot). " +
+                        "Pega cookies de YouTube en Ajustes → Reproducción y Audio, o escucha en FLAC."
+                DesktopStreamResolver.HINT_UNAVAILABLE ->
+                    "YouTube no tiene disponible \"$title\" en esta región. Prueba otra versión o FLAC."
+                else -> {
+                    val fuente = if (s.playbackSource == "FLAC") "FLAC ni YouTube" else "YouTube Music"
+                    "No disponible en $fuente: \"$title\". Revisa Ajustes o la conexion."
+                }
+            }
+            player.markError(message)
             return@launch
         }
         val finalDurationMs = if (stream.durationMs > 0) stream.durationMs else initialDurationMs
@@ -281,6 +296,12 @@ fun main() {
     // Warm up de YouTube + motor de descifrado, TODO en segundo plano.
     // Antes el descifrado se descargaba (player JS) en medio de la primera cancion y se
     // cancelaba a los 1.5s, asi que el plan nunca se guardaba y se repetia en cada tema.
+    // Cookies persistidas: se aplican antes de crear el player (asignacion local, sin
+    // red) para que la primera cancion ya las use. Sin sesion, YouTube responde
+    // LOGIN_REQUIRED ("confirma que no eres un bot") a casi cualquier tema musical.
+    buildYouTubeCookieHeader(DesktopSettingsStore.settings.value.youtubeCookie)?.let {
+        runCatching { YouTube.cookie = it }
+    }
     CoroutineScope(Dispatchers.IO).launch {
         // Igual que Android: ademas de calentar la conexion (la primera peticion de red
         // paga DNS+TLS, ~2 s), guardamos el visitorData de la sesion para que el player

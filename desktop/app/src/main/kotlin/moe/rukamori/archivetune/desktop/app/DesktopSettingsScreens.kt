@@ -25,6 +25,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
 import moe.rukamori.archivetune.desktop.runtime.DesktopPlayer
+import moe.rukamori.archivetune.innertube.YouTube
 import java.io.File
 import kotlin.math.roundToInt
 
@@ -1021,6 +1022,81 @@ fun PlaybackSettingsScreen(
             }
             Spacer(Modifier.height(16.dp))
         }
+
+        // Cookies de YouTube: sin sesion, YouTube responde "confirma que no eres un bot"
+        // a casi cualquier tema musical y la app se quedaria muda.
+        var ytCookie by remember { mutableStateOf(settings.youtubeCookie) }
+        var ytCookieSaved by remember { mutableStateOf(false) }
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E28)),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Column(Modifier.padding(18.dp)) {
+                Text("Sesión de YouTube (respaldo)", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color.White)
+                Text(
+                    "YouTube bloquea muchos temas anónimos con \"Inicia sesión para confirmar que no eres un bot\". " +
+                        "Si pegas aquí las cookies de una sesión de YouTube, la app las usará para esos temas. " +
+                        "Se guardan solo en este equipo (settings.json).",
+                    color = Color.Gray, fontSize = 12.sp
+                )
+                Spacer(Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = ytCookie,
+                    onValueChange = { ytCookie = it; ytCookieSaved = false },
+                    label = { Text("Cookie de youtube.com (o contenido de cookies.txt)") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = false,
+                    minLines = 2,
+                    maxLines = 6
+                )
+                Spacer(Modifier.height(8.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Button(
+                        onClick = {
+                            scope.launch {
+                                val normalized = buildYouTubeCookieHeader(ytCookie)
+                                DesktopSettingsStore.updateSettings { it.copy(youtubeCookie = normalized ?: "") }
+                                runCatching { YouTube.cookie = normalized }
+                                ytCookie = normalized ?: ""
+                                ytCookieSaved = true
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF5252))
+                    ) {
+                        Text("Guardar cookies", color = Color.Black)
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    if (ytCookieSaved) {
+                        Text("Guardadas", color = Color(0xFF69F0AE), fontSize = 12.sp)
+                    }
+                    if (settings.youtubeCookie.isNotBlank()) {
+                        Spacer(Modifier.width(8.dp))
+                        TextButton(
+                            onClick = {
+                                scope.launch {
+                                    ytCookie = ""
+                                    DesktopSettingsStore.updateSettings { it.copy(youtubeCookie = "") }
+                                    runCatching { YouTube.cookie = null }
+                                    ytCookieSaved = true
+                                }
+                            }
+                        ) {
+                            Text("Borrar", color = Color(0xFFEF4444), fontSize = 12.sp)
+                        }
+                    }
+                }
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "Cómo obtenerlas: inicia sesión en youtube.com, pulsa F12 → Red, recarga y copia la " +
+                        "cabecera Cookie de una petición a youtube.com. También sirve un cookies.txt exportado " +
+                        "con una extensión (solo se usan las cookies de youtube.com/google.com).",
+                    color = Color.Gray, fontSize = 11.sp
+                )
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
 
         // Filtros y DSP de Audio
         Card(

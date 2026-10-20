@@ -78,6 +78,15 @@ object DesktopStreamResolver {
     // a ~100-300 ms, asi que ampliamos presupuesto solo mientras este frio.
     private val playerNetworkWarm = java.util.concurrent.atomic.AtomicBoolean(false)
 
+    // Motivo del ultimo fallo de YouTube, para que la UI no diga "revisa la conexion"
+    // cuando en realidad YouTube pide iniciar sesion (bloqueo antibot).
+    const val HINT_LOGIN = "login"
+    const val HINT_UNAVAILABLE = "unavailable"
+    const val HINT_NETWORK = "network"
+    @Volatile
+    var lastFailureHint: String? = null
+        private set
+
     /**
      * Descarga y compila el plan del descifrador en segundo plano. Idempotente y
      * sin coste para el usuario: se llama al arrancar la app y de forma defensiva
@@ -344,11 +353,12 @@ object DesktopStreamResolver {
         // En frio hay que pagar DNS+TLS una vez; despues 2.8 s sobran de sobra.
         val budgetMs = if (warm) 2_800L else 8_000L
         val startedAt = System.currentTimeMillis()
+        val failures = java.util.concurrent.ConcurrentHashMap<String, String>()
 
         val candidateChannel = kotlinx.coroutines.channels.Channel<ResolvedAudioStream>(capacity = clients.size)
         val probeJobs = clients.map { client ->
             launch {
-                val stream = tryResolveClient(videoId, client, preferredQuality, durationMs, budgetMs)
+                val stream = tryResolveClient(videoId, client, preferredQuality, durationMs, budgetMs, failures)
                 if (stream != null) candidateChannel.trySend(stream)
             }
         }
@@ -365,10 +375,22 @@ object DesktopStreamResolver {
         probeJobs.forEach { runCatching { it.cancel() } }
         closerJob.cancel()
 
+        if (result == null) {
+            // Distinguir "YouTube pide cuenta" de "no hay red" evita mensajes que
+            // mandan al usuario a revisar la conexion cuando el problema es otro.
+            val details = failures.values.joinToString(" ").lowercase()
+            lastFailureHint = when {
+                details.contains("login_required") || details.contains("bot") ||
+                    details.contains("cuenta") -> HINT_LOGIN
+                details.contains("unplayable") || details.contains("no disponible") -> HINT_UNAVAILABLE
+                else -> HINT_NETWORK
+            }
+        }
+
         DesktopDiag.log(
             "yt", System.currentTimeMillis() - startedAt,
             if (result != null) "ok client=${result.clientName} warm=$warm"
-            else "sin candidatos warm=$warm"
+            else "sin candidatos warm=$warm hint=$lastFailureHint"
         )
         result
     }
@@ -379,9 +401,11 @@ object DesktopStreamResolver {
         preferredQuality: String,
         durationMs: Long,
         timeoutMs: Long,
+        failures: MutableMap<String, String>,
     ): ResolvedAudioStream? {
         val clientStartedAt = System.currentTimeMillis()
         fun logClient(detail: String) {
+            failures[client.clientName] = detail
             DesktopDiag.log("yt-client", System.currentTimeMillis() - clientStartedAt, "${client.clientName}: $detail")
         }
         return try {
