@@ -282,7 +282,14 @@ fun main() {
     // Antes el descifrado se descargaba (player JS) en medio de la primera cancion y se
     // cancelaba a los 1.5s, asi que el plan nunca se guardaba y se repetia en cada tema.
     CoroutineScope(Dispatchers.IO).launch {
-        runCatching { YouTube.visitorData() }
+        // Igual que Android: ademas de calentar la conexion (la primera peticion de red
+        // paga DNS+TLS, ~2 s), guardamos el visitorData de la sesion para que el player
+        // mande X-Goog-Visitor-Id (sesion consistente = menos 403). Antes se pedia y se
+        // tiraba a la basura, asi que la sesion cambiaba en cada peticion.
+        val visitor = runCatching { YouTube.visitorData() }.getOrNull()?.getOrNull()
+        if (!visitor.isNullOrBlank()) {
+            runCatching { YouTube.visitorData = visitor }
+        }
         DesktopStreamResolver.warmUpCipher()
     }
 

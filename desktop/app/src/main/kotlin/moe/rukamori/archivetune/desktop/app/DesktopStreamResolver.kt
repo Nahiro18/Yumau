@@ -65,12 +65,18 @@ object DesktopStreamResolver {
     // llegar throttled. Pero desofuscar con el motor FRIO cuesta segundos (descarga
     // del player + compilacion) y, como lo cancelabamos, nunca se guardaba el plan:
     // se repetia en cada tema. Ahora el motor se calienta UNA vez al arrancar y
-    // solo se usa cuando ya esta listo ( transformational en milisegundos).
+    // solo se usa cuando ya esta listo (transformacional en milisegundos).
     private val cipherWarmStarted = java.util.concurrent.atomic.AtomicBoolean(false)
     private val cipherFastReady = java.util.concurrent.atomic.AtomicBoolean(false)
     // Si desofuscar tarda demasiado (Rhino lento), dejamos de pagar ese coste en
     // cada tema durante 10 min y usamos la URL directa (que va sobrada de velocidad).
     private val cipherDisabledUntilMs = java.util.concurrent.atomic.AtomicLong(0L)
+
+    // La PRIMERA peticion de red de la sesion paga DNS + TLS de music.youtube.com
+    // (~1.8-2.0 s medidos). Antes la ventana corta tiraba ese primer resultado (llegaba
+    // a los 2.05 s) y la cancion no sonaba nunca. Tras la primera respuesta todo baja
+    // a ~100-300 ms, asi que ampliamos presupuesto solo mientras este frio.
+    private val playerNetworkWarm = java.util.concurrent.atomic.AtomicBoolean(false)
 
     /**
      * Descarga y compila el plan del descifrador en segundo plano. Idempotente y
@@ -321,7 +327,10 @@ object DesktopStreamResolver {
     }
 
     /**
-     * Solo YouTube Music: carrera corta de 3 clientes en paralelo, luego 2 de refuerzo.
+     * Solo YouTube Music: TODOS los clientes se prueban a la vez y gana el primero que
+     * devuelva una URL directa. Antes se probaban 3 y, si tardaban >2 s, sus resultados
+     * se tiraban a la basura y solo se esperaba a otros 2: con la conexion en frio (la
+     * primera peticion tarda ~2 s de TLS) la cancion no sonaba nunca.
      * Sin URLs de watch (evita yt-dlp). Devuelve null si ningun cliente dio URL directa.
      */
     private suspend fun resolveViaYouTube(
@@ -331,59 +340,80 @@ object DesktopStreamResolver {
         durationMs: Long,
     ): ResolvedAudioStream? = withContext(Dispatchers.IO) {
         val clients = getClientCandidates(preferredClientName)
+        val warm = playerNetworkWarm.get()
+        // En frio hay que pagar DNS+TLS una vez; despues 2.8 s sobran de sobra.
+        val budgetMs = if (warm) 2_800L else 8_000L
+        val startedAt = System.currentTimeMillis()
 
-        val topClients = clients.take(3)
-        val candidateChannel = kotlinx.coroutines.channels.Channel<ResolvedAudioStream>(capacity = topClients.size)
-        val probeJobs = topClients.map { client ->
+        val candidateChannel = kotlinx.coroutines.channels.Channel<ResolvedAudioStream>(capacity = clients.size)
+        val probeJobs = clients.map { client ->
             launch {
-                val stream = tryResolveClient(videoId, client, preferredQuality, durationMs)
+                val stream = tryResolveClient(videoId, client, preferredQuality, durationMs, budgetMs)
                 if (stream != null) candidateChannel.trySend(stream)
             }
         }
+        // Si TODOS los clientes fallan rapido (video bloqueado, 400...), cerramos el
+        // canal para no esperar el presupuesto entero antes de enseñar el error.
+        val closerJob = launch {
+            probeJobs.forEach { runCatching { it.join() } }
+            candidateChannel.close()
+        }
 
-        val fastResult = withTimeoutOrNull(2000L) {
+        val result = withTimeoutOrNull(budgetMs) {
             candidateChannel.receiveCatching().getOrNull()
         }
-        if (fastResult != null) {
-            probeJobs.forEach { it.cancel() }
-            return@withContext fastResult
-        }
-
-        // Refuerzo: 2 clientes mas, en paralelo, timeout corto
-        val backup = clients.drop(3).take(2)
-        val backupChannel = kotlinx.coroutines.channels.Channel<ResolvedAudioStream>(capacity = backup.size)
-        val backupJobs = backup.map { client ->
-            launch {
-                val stream = tryResolveClient(videoId, client, preferredQuality, durationMs)
-                if (stream != null) backupChannel.trySend(stream)
-            }
-        }
-        val backupResult = withTimeoutOrNull(1800L) {
-            backupChannel.receiveCatching().getOrNull()
-        }
         probeJobs.forEach { runCatching { it.cancel() } }
-        backupJobs.forEach { runCatching { it.cancel() } }
-        backupResult
+        closerJob.cancel()
+
+        DesktopDiag.log(
+            "yt", System.currentTimeMillis() - startedAt,
+            if (result != null) "ok client=${result.clientName} warm=$warm"
+            else "sin candidatos warm=$warm"
+        )
+        result
     }
 
     private suspend fun tryResolveClient(
         videoId: String,
         client: YouTubeClient,
         preferredQuality: String,
-        durationMs: Long
+        durationMs: Long,
+        timeoutMs: Long,
     ): ResolvedAudioStream? {
+        val clientStartedAt = System.currentTimeMillis()
+        fun logClient(detail: String) {
+            DesktopDiag.log("yt-client", System.currentTimeMillis() - clientStartedAt, "${client.clientName}: $detail")
+        }
         return try {
-            val response = withTimeoutOrNull(2500L) {
-                YouTube.player(videoId = videoId, client = client).getOrNull()
-            } ?: return null
+            val playerResult = withTimeoutOrNull(timeoutMs) {
+                YouTube.player(videoId = videoId, client = client)
+            }
+            if (playerResult == null) {
+                logClient("timeout ${timeoutMs}ms")
+                return null
+            }
+            // En cuanto una peticion completa, la conexion queda caliente para el resto.
+            playerNetworkWarm.set(true)
+            val response = playerResult.getOrNull()
+            if (response == null) {
+                val failure = playerResult.exceptionOrNull()
+                logClient(failure?.let { "${it::class.simpleName}: ${it.message?.take(90)}" } ?: "sin respuesta")
+                return null
+            }
 
-            if (response.playabilityStatus.status != "OK") return null
+            if (response.playabilityStatus.status != "OK") {
+                logClient("${response.playabilityStatus.status} ${response.playabilityStatus.reason?.take(70) ?: ""}".trim())
+                return null
+            }
 
             val formats = response.streamingData?.adaptiveFormats
                 ?.filter { it.isAudio && it.bitrate > 0 }
                 .orEmpty()
 
-            if (formats.isEmpty()) return null
+            if (formats.isEmpty()) {
+                logClient("sin formatos de audio")
+                return null
+            }
 
             val songDurationMs = response.videoDetails
                 ?.lengthSeconds
@@ -441,7 +471,11 @@ object DesktopStreamResolver {
                     formatLabel = formatLabel
                 )
             } else null
-        } catch (_: Exception) {
+        } catch (cancel: kotlinx.coroutines.CancellationException) {
+            // Si la carrera ya tiene ganador, cancelar este cliente NO es un fallo.
+            throw cancel
+        } catch (failure: Throwable) {
+            logClient("${failure::class.simpleName}: ${failure.message?.take(90)}")
             null
         }
     }
