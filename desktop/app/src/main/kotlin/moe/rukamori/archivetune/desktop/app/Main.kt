@@ -381,6 +381,11 @@ fun main() {
             state = rememberWindowState(width = 1240.dp, height = 820.dp),
             title = "YumaPlayer - Linux Mint",
         ) {
+            LaunchedEffect(Unit) {
+                // Evita que la barra del reproductor (ahora con botones grandes) se
+                // comprima hasta quedar inservible en ventanas muy pequeñas.
+                window.minimumSize = java.awt.Dimension(1000, 800)
+            }
             YumaApp(player)
         }
     }
@@ -394,6 +399,13 @@ private val SpotifyBrandGreen = Color(0xFF1DB954)
 fun YumaApp(player: DesktopPlayer) {
     val settings by DesktopSettingsStore.settings.collectAsState()
     val scope = rememberCoroutineScope()
+    // Prefetch en segundo plano: deja Home y Biblioteca listos sin tener que entrar
+    // a otra pestaña para que se dispare la primera carga.
+    LaunchedEffect(Unit) {
+        if (DesktopSpotifyStore.session.value.isLoggedIn) {
+            DesktopSpotifyStore.refreshLibrary()
+        }
+    }
     // 0: Inicio, 1: Buscar, 2: Biblioteca, 3: Ajustes, 4: Letras, 5: Cola
     var selectedSection by remember { mutableStateOf(settings.defaultTab) }
     var previousSection by remember { mutableStateOf(settings.defaultTab) }
@@ -1072,7 +1084,7 @@ fun SettingsScreen(player: DesktopPlayer? = null) {
         },
         spotifyStatusText = spotifyStatusText,
         onSyncSpotify = {
-            scope.launch { DesktopSpotifyStore.refreshLibrary() }
+            scope.launch { DesktopSpotifyStore.refreshLibrary(force = true) }
         },
         onDisconnectSpotify = {
             scope.launch { DesktopSpotifyStore.logout() }
@@ -1516,7 +1528,7 @@ fun PlayerBar(
         ) {
             Column(Modifier.fillMaxWidth()) {
                 Row(
-                    Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+                    Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     // Caratula + metadatos: click expande el FullPlayer (como Android)
@@ -1532,15 +1544,15 @@ fun PlayerBar(
                             Image(
                                 bitmap = thumbBitmap,
                                 contentDescription = null,
-                                modifier = Modifier.size(58.dp).clip(RoundedCornerShape(12.dp)),
+                                modifier = Modifier.size(64.dp).clip(RoundedCornerShape(12.dp)),
                                 contentScale = ContentScale.Crop
                             )
                         } else {
                             Box(
-                                modifier = Modifier.size(58.dp).clip(RoundedCornerShape(12.dp)).background(Color(0xFF282B35)),
+                                modifier = Modifier.size(64.dp).clip(RoundedCornerShape(12.dp)).background(Color(0xFF282B35)),
                                 contentAlignment = Alignment.Center
                             ) {
-                                Icon(Icons.Default.MusicNote, contentDescription = null, tint = Color.Gray, modifier = Modifier.size(28.dp))
+                                Icon(Icons.Default.MusicNote, contentDescription = null, tint = Color.Gray, modifier = Modifier.size(30.dp))
                             }
                         }
 
@@ -1588,19 +1600,19 @@ fun PlayerBar(
                     AndroidCircleButton(
                         icon = Icons.Default.Mic,
                         contentDescription = "Letras y Karaoke",
-                        size = 46.dp,
-                        iconSize = 24.dp,
+                        size = 56.dp,
+                        iconSize = 30.dp,
                         onClick = onOpenLyrics
                     )
 
                     // Boton Favorito
                     if (current != null) {
-                        Spacer(Modifier.width(6.dp))
+                        Spacer(Modifier.width(8.dp))
                         AndroidCircleButton(
                             icon = if (isFav) Icons.Default.Favorite else Icons.Outlined.FavoriteBorder,
                             contentDescription = "Me gusta",
-                            size = 46.dp,
-                            iconSize = 22.dp,
+                            size = 56.dp,
+                            iconSize = 30.dp,
                             tint = if (isFav) Color(0xFFEF4444) else Color.White,
                             onClick = {
                                 scope.launch {
@@ -1616,20 +1628,20 @@ fun PlayerBar(
                     }
 
                     // Boton Anterior
-                    Spacer(Modifier.width(6.dp))
+                    Spacer(Modifier.width(8.dp))
                     AndroidCircleButton(
                         icon = Icons.Default.SkipPrevious,
                         contentDescription = "Anterior",
-                        size = 48.dp,
-                        iconSize = 28.dp,
+                        size = 60.dp,
+                        iconSize = 36.dp,
                         onClick = { player.prev() }
                     )
 
                     // Play/Pausa: circulo principal grande (estilo Android)
-                    Spacer(Modifier.width(8.dp))
+                    Spacer(Modifier.width(10.dp))
                     Box(
                         modifier = Modifier
-                            .size(60.dp)
+                            .size(76.dp)
                             .clip(CircleShape)
                             .background(MaterialTheme.colorScheme.primary)
                             .clickable { player.playPause() },
@@ -1638,37 +1650,37 @@ fun PlayerBar(
                         Icon(
                             if (state == DesktopPlayerState.PLAYING) Icons.Default.Pause else Icons.Default.PlayArrow,
                             contentDescription = "Play/Pausa", tint = Color.White,
-                            modifier = Modifier.size(34.dp)
+                            modifier = Modifier.size(46.dp)
                         )
                     }
 
                     // Boton Siguiente
-                    Spacer(Modifier.width(8.dp))
+                    Spacer(Modifier.width(10.dp))
                     AndroidCircleButton(
                         icon = Icons.Default.SkipNext,
                         contentDescription = "Siguiente",
-                        size = 48.dp,
-                        iconSize = 28.dp,
+                        size = 60.dp,
+                        iconSize = 36.dp,
                         onClick = { player.next() }
                     )
 
                     // Boton Cola
-                    Spacer(Modifier.width(6.dp))
+                    Spacer(Modifier.width(8.dp))
                     AndroidCircleButton(
                         icon = Icons.AutoMirrored.Filled.QueueMusic,
                         contentDescription = "Cola de reproducción",
-                        size = 46.dp,
-                        iconSize = 24.dp,
+                        size = 56.dp,
+                        iconSize = 30.dp,
                         onClick = onOpenQueue
                     )
 
                     // Panel lateral (letras + info en vivo)
-                    Spacer(Modifier.width(6.dp))
+                    Spacer(Modifier.width(8.dp))
                     AndroidCircleButton(
                         icon = Icons.Default.ExpandLess,
                         contentDescription = "Panel lateral",
-                        size = 40.dp,
-                        iconSize = 20.dp,
+                        size = 48.dp,
+                        iconSize = 24.dp,
                         tint = Color.Gray,
                         onClick = onToggleSidePanel
                     )
@@ -1676,7 +1688,7 @@ fun PlayerBar(
                 // Progreso estilo Android (mini-player)
                 LinearProgressIndicator(
                     progress = { progress },
-                    modifier = Modifier.fillMaxWidth().height(3.dp),
+                    modifier = Modifier.fillMaxWidth().height(4.dp),
                     color = MaterialTheme.colorScheme.primary,
                     trackColor = Color(0xFF374151),
                 )
@@ -1744,12 +1756,15 @@ fun AndroidFullPlayerOverlay(
     var dragFrac by remember { mutableStateOf(0f) }
     var lastNonZeroVolume by remember { mutableStateOf(80) }
 
-    Box(
+    BoxWithConstraints(
         Modifier.fillMaxSize().background(Color(0xE60F1117))
             .clickable { onCollapse() }
             .padding(24.dp),
         contentAlignment = Alignment.Center
     ) {
+        // La carátula se adapta al alto de la ventana: así los controles grandes y la
+        // fila de karaoke/volumen no se salen de la pantalla en ventanas pequeñas.
+        val coverSize = minOf(504.dp, maxHeight - 400.dp).coerceAtLeast(300.dp)
         Card(
             modifier = Modifier.widthIn(max = 560.dp).fillMaxWidth()
                 .clickable(enabled = false) {},
@@ -1786,7 +1801,7 @@ fun AndroidFullPlayerOverlay(
                 Spacer(Modifier.height(8.dp))
                 // Caratula grande 1:1 estilo Android FullPlayer
                 Box(
-                    Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(20.dp))
+                    Modifier.size(coverSize).clip(RoundedCornerShape(20.dp))
                         .background(Color(0xFF232634)),
                     contentAlignment = Alignment.Center
                 ) {
@@ -1819,7 +1834,7 @@ fun AndroidFullPlayerOverlay(
                         }) {
                             Icon(if (isFav) Icons.Default.Favorite else Icons.Outlined.FavoriteBorder,
                                 contentDescription = "Me gusta",
-                                tint = if (isFav) Color(0xFFEF4444) else Color.Gray, modifier = Modifier.size(26.dp))
+                                tint = if (isFav) Color(0xFFEF4444) else Color.Gray, modifier = Modifier.size(30.dp))
                         }
                     }
                 }
@@ -1871,21 +1886,21 @@ fun AndroidFullPlayerOverlay(
                 ) {
                     AndroidCircleButton(
                         icon = Icons.Default.Shuffle, contentDescription = "Aleatorio",
-                        size = 52.dp, iconSize = 26.dp,
+                        size = 60.dp, iconSize = 30.dp,
                         tint = if (shuffleEnabled) MaterialTheme.colorScheme.primary else Color.White,
                         onClick = { player.toggleShuffle() }
                     )
-                    Spacer(Modifier.width(10.dp))
+                    Spacer(Modifier.width(12.dp))
                     AndroidCircleButton(
                         icon = Icons.Default.SkipPrevious, contentDescription = "Anterior",
-                        size = 56.dp, iconSize = 34.dp,
+                        size = 64.dp, iconSize = 40.dp,
                         onClick = { player.prev() }
                     )
-                    Spacer(Modifier.width(14.dp))
-                    // Play/Pausa: circulo principal (72dp, como Android FullPlayer)
+                    Spacer(Modifier.width(16.dp))
+                    // Play/Pausa: circulo principal (86dp, como Android FullPlayer)
                     Box(
                         modifier = Modifier
-                            .size(76.dp)
+                            .size(86.dp)
                             .clip(CircleShape)
                             .background(MaterialTheme.colorScheme.primary)
                             .clickable { player.playPause() },
@@ -1893,20 +1908,20 @@ fun AndroidFullPlayerOverlay(
                     ) {
                         Icon(
                             if (state == DesktopPlayerState.PLAYING) Icons.Default.Pause else Icons.Default.PlayArrow,
-                            contentDescription = "Play/Pausa", tint = Color.White, modifier = Modifier.size(42.dp)
+                            contentDescription = "Play/Pausa", tint = Color.White, modifier = Modifier.size(50.dp)
                         )
                     }
-                    Spacer(Modifier.width(14.dp))
+                    Spacer(Modifier.width(16.dp))
                     AndroidCircleButton(
                         icon = Icons.Default.SkipNext, contentDescription = "Siguiente",
-                        size = 56.dp, iconSize = 34.dp,
+                        size = 64.dp, iconSize = 40.dp,
                         onClick = { player.next() }
                     )
-                    Spacer(Modifier.width(10.dp))
+                    Spacer(Modifier.width(12.dp))
                     AndroidCircleButton(
                         icon = when (repeatMode) { 2 -> Icons.Default.RepeatOne; 1 -> Icons.Default.Repeat; else -> Icons.Default.Repeat },
                         contentDescription = "Repetir",
-                        size = 52.dp, iconSize = 26.dp,
+                        size = 60.dp, iconSize = 30.dp,
                         tint = if (repeatMode > 0) MaterialTheme.colorScheme.primary else Color.White,
                         onClick = { player.cycleRepeatMode() }
                     )
@@ -1920,28 +1935,28 @@ fun AndroidFullPlayerOverlay(
                 ) {
                     AndroidCircleButton(
                         icon = Icons.Default.FastRewind, contentDescription = "-${settings.seekDurationSeconds}s",
-                        size = 48.dp, iconSize = 26.dp, tint = Color.LightGray,
+                        size = 56.dp, iconSize = 30.dp, tint = Color.LightGray,
                         onClick = { player.seekRelative(-settings.seekDurationSeconds.toDouble()) }
                     )
                     // Boton de Karaoke/Letras destacado (con acento)
                     Box(
                         modifier = Modifier
-                            .clip(RoundedCornerShape(24.dp))
+                            .clip(RoundedCornerShape(26.dp))
                             .background(Color(0xFF2D224C))
-                            .border(1.dp, Color(0xFFA78BFA).copy(alpha = 0.5f), RoundedCornerShape(24.dp))
+                            .border(1.dp, Color(0xFFA78BFA).copy(alpha = 0.5f), RoundedCornerShape(26.dp))
                             .clickable { onOpenLyrics() }
-                            .padding(horizontal = 18.dp, vertical = 11.dp)
+                            .padding(horizontal = 20.dp, vertical = 13.dp)
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.Mic, contentDescription = "Karaoke y Letras", tint = Color(0xFFA78BFA), modifier = Modifier.size(24.dp))
-                            Spacer(Modifier.width(8.dp))
-                            Text("Karaoke", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = Color(0xFFA78BFA))
+                            Icon(Icons.Default.Mic, contentDescription = "Karaoke y Letras", tint = Color(0xFFA78BFA), modifier = Modifier.size(28.dp))
+                            Spacer(Modifier.width(10.dp))
+                            Text("Karaoke", fontWeight = FontWeight.Bold, fontSize = 15.sp, color = Color(0xFFA78BFA))
                         }
                     }
                     Spacer(Modifier.weight(1f))
                     AndroidCircleButton(
                         icon = Icons.Default.FastForward, contentDescription = "+${settings.seekDurationSeconds}s",
-                        size = 48.dp, iconSize = 26.dp, tint = Color.LightGray,
+                        size = 56.dp, iconSize = 30.dp, tint = Color.LightGray,
                         onClick = { player.seekRelative(settings.seekDurationSeconds.toDouble()) }
                     )
                     AndroidCircleButton(
@@ -1951,7 +1966,7 @@ fun AndroidFullPlayerOverlay(
                             else -> Icons.AutoMirrored.Filled.VolumeUp
                         },
                         contentDescription = "Volumen",
-                        size = 48.dp, iconSize = 24.dp,
+                        size = 56.dp, iconSize = 28.dp,
                         tint = if (volume == 0) Color.Red else Color.White,
                         onClick = {
                             if (volume > 0) { lastNonZeroVolume = volume; player.setVolume(0) }
@@ -1961,7 +1976,7 @@ fun AndroidFullPlayerOverlay(
                     Slider(
                         value = volume / 100f,
                         onValueChange = { player.setVolume((it * 100).toInt()) },
-                        modifier = Modifier.width(110.dp),
+                        modifier = Modifier.width(130.dp),
                         colors = SliderDefaults.colors(
                             thumbColor = Color.White, activeTrackColor = Color(0xFFA78BFA),
                             inactiveTrackColor = Color(0xFF374151))

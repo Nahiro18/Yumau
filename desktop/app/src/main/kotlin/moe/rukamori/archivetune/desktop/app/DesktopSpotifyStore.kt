@@ -5,6 +5,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
@@ -45,6 +47,9 @@ data class SpotifySessionData(
     val email: String = "",
     val avatarUrl: String = "",
     val isLoggedIn: Boolean = false,
+    // Epoch ms en que caduca accessToken. 0 = desconocido (sesiones antiguas):
+    // se renueva la primera vez y se guarda la caducidad real.
+    val accessTokenExpiresAt: Long = 0L,
 )
 
 data class DesktopRecentItem(
@@ -110,6 +115,9 @@ object DesktopSpotifyStore {
     private val _isHomeLoading = MutableStateFlow(false)
     val isHomeLoading: StateFlow<Boolean> = _isHomeLoading.asStateFlow()
 
+    private val _isLibraryLoading = MutableStateFlow(false)
+    val isLibraryLoading: StateFlow<Boolean> = _isLibraryLoading.asStateFlow()
+
     init {
         loadSession()
     }
@@ -155,7 +163,8 @@ object DesktopSpotifyStore {
             displayName = user?.displayName ?: "Usuario de Spotify",
             email = user?.email.orEmpty(),
             avatarUrl = user?.images?.firstOrNull()?.url.orEmpty(),
-            isLoggedIn = true
+            isLoggedIn = true,
+            accessTokenExpiresAt = token.accessTokenExpirationTimestampMs
         )
         _session.value = newSession
         saveSession(newSession)
@@ -221,7 +230,12 @@ object DesktopSpotifyStore {
                 val newAccess = jsonTree?.get("access_token")?.jsonPrimitive?.content
                 if (!newAccess.isNullOrBlank()) {
                     val newRefresh = jsonTree.get("refresh_token")?.jsonPrimitive?.contentOrNull ?: refreshToken
-                    val updated = _session.value.copy(accessToken = newAccess, refreshToken = newRefresh)
+                    val expiresIn = jsonTree.get("expires_in")?.jsonPrimitive?.contentOrNull?.toLongOrNull() ?: 3600L
+                    val updated = _session.value.copy(
+                        accessToken = newAccess,
+                        refreshToken = newRefresh,
+                        accessTokenExpiresAt = System.currentTimeMillis() + expiresIn * 1000L
+                    )
                     _session.value = updated
                     saveSession(updated)
                     Spotify.accessToken = newAccess
@@ -253,70 +267,103 @@ object DesktopSpotifyStore {
         } catch (_: Exception) {}
     }
 
-    suspend fun refreshLibrary() = withContext(Dispatchers.IO) {
-        if (!_session.value.isLoggedIn) return@withContext
+    private val tokenRefreshMutex = Mutex()
 
-        val refreshToken = _session.value.refreshToken
-        val spDc = _session.value.spDc
-        val spKey = _session.value.spKey
-        val spT = _session.value.spT
-        val fullCookieHeader = _session.value.fullCookieHeader
+    /**
+     * Renueva el accessToken si caducó o si no conocemos su caducidad (sesiones
+     * guardadas por versiones anteriores). Antes solo lo hacía Biblioteca; por eso
+     * Home arrancaba con un token muerto y no cargaba hasta entrar allí y volver.
+     */
+    private suspend fun ensureValidAccessToken() = tokenRefreshMutex.withLock {
+        val current = _session.value
+        if (!current.isLoggedIn) return@withLock
+        val now = System.currentTimeMillis()
+        // Margen de 2 min: evita usar un token que caduca a mitad de la carga.
+        if (current.accessTokenExpiresAt > now + 120_000L) return@withLock
 
-        if (refreshToken.isNotBlank()) {
-            refreshWithRefreshToken(refreshToken)
-        } else if (spDc.isNotBlank() || fullCookieHeader.isNotBlank()) {
+        if (current.spDc.isNotBlank() || current.fullCookieHeader.isNotBlank()) {
             val tokenRes = SpotifyAuth.fetchAccessToken(
-                spDc = spDc,
-                spKey = spKey,
-                spT = spT,
-                extraCookies = fullCookieHeader
+                spDc = current.spDc,
+                spKey = current.spKey,
+                spT = current.spT,
+                extraCookies = current.fullCookieHeader
             )
-            tokenRes.getOrNull()?.let {
-                Spotify.accessToken = it.accessToken
-                _session.value = _session.value.copy(accessToken = it.accessToken)
+            tokenRes.getOrNull()?.let { token ->
+                Spotify.accessToken = token.accessToken
+                _session.value = _session.value.copy(
+                    accessToken = token.accessToken,
+                    accessTokenExpiresAt = token.accessTokenExpirationTimestampMs
+                )
                 saveSession(_session.value)
+                return@withLock
             }
         }
 
-        runCatching {
-            val liked = Spotify.likedSongs(limit = 50, offset = 0).getOrNull()
-            if (liked != null) {
-                _totalLikedSongs.value = liked.total
-                val allLiked = liked.items.toMutableList()
-                _likedSongs.value = allLiked
-                if (liked.total > 50) {
-                    var offset = 50
-                    while (offset < liked.total && offset < 500) {
-                        val more = Spotify.likedSongs(limit = 50, offset = offset).getOrNull() ?: break
-                        if (more.items.isEmpty()) break
-                        allLiked.addAll(more.items)
-                        _likedSongs.value = allLiked.toList()
-                        offset += 50
+        if (current.refreshToken.isNotBlank()) {
+            refreshWithRefreshToken(current.refreshToken)
+        }
+    }
+
+    private var lastLibraryFetchTime: Long = 0L
+
+    suspend fun refreshLibrary(force: Boolean = false) = withContext(Dispatchers.IO) {
+        if (!_session.value.isLoggedIn) return@withContext
+        if (_isLibraryLoading.value) return@withContext
+        val now = System.currentTimeMillis()
+        // Evita repetir la carga entera cada vez que se entra a la pestaña.
+        if (!force && now - lastLibraryFetchTime < 60_000L &&
+            (_likedSongs.value.isNotEmpty() || _playlists.value.isNotEmpty())
+        ) {
+            return@withContext
+        }
+
+        _isLibraryLoading.value = true
+        try {
+            ensureValidAccessToken()
+
+            runCatching {
+                val liked = Spotify.likedSongs(limit = 50, offset = 0).getOrNull()
+                if (liked != null) {
+                    _totalLikedSongs.value = liked.total
+                    val allLiked = liked.items.toMutableList()
+                    _likedSongs.value = allLiked
+                    if (liked.total > 50) {
+                        var offset = 50
+                        while (offset < liked.total && offset < 500) {
+                            val more = Spotify.likedSongs(limit = 50, offset = offset).getOrNull() ?: break
+                            if (more.items.isEmpty()) break
+                            allLiked.addAll(more.items)
+                            _likedSongs.value = allLiked.toList()
+                            offset += 50
+                        }
                     }
                 }
             }
-        }
 
-        runCatching {
-            val pls = Spotify.myPlaylists(limit = 50, offset = 0).getOrNull()
-            if (pls != null) {
-                _totalPlaylists.value = pls.total
-                val allPls = pls.items.toMutableList()
-                _playlists.value = allPls
-                if (pls.total > 50) {
-                    var offset = 50
-                    while (offset < pls.total && offset < 200) {
-                        val more = Spotify.myPlaylists(limit = 50, offset = offset).getOrNull() ?: break
-                        if (more.items.isEmpty()) break
-                        allPls.addAll(more.items)
-                        _playlists.value = allPls.toList()
-                        offset += 50
+            runCatching {
+                val pls = Spotify.myPlaylists(limit = 50, offset = 0).getOrNull()
+                if (pls != null) {
+                    _totalPlaylists.value = pls.total
+                    val allPls = pls.items.toMutableList()
+                    _playlists.value = allPls
+                    if (pls.total > 50) {
+                        var offset = 50
+                        while (offset < pls.total && offset < 200) {
+                            val more = Spotify.myPlaylists(limit = 50, offset = offset).getOrNull() ?: break
+                            if (more.items.isEmpty()) break
+                            allPls.addAll(more.items)
+                            _playlists.value = allPls.toList()
+                            offset += 50
+                        }
                     }
                 }
             }
-        }
 
-        refreshHomeFeed()
+            refreshHomeFeed()
+            lastLibraryFetchTime = System.currentTimeMillis()
+        } finally {
+            _isLibraryLoading.value = false
+        }
     }
 
     private var lastHomeFetchTime: Long = 0L
@@ -331,6 +378,9 @@ object DesktopSpotifyStore {
         _isHomeLoading.value = true
         lastHomeFetchTime = now
         try {
+            // Home también renueva el token: antes solo lo hacía Biblioteca y, si el
+            // token guardado había caducado, la portada se quedaba vacía hasta volver.
+            ensureValidAccessToken()
             val recentDeferred = async { runCatching { Spotify.recentlyPlayed(limit = 20).getOrNull() } }
             val topTracksDeferred = async { runCatching { Spotify.topTracks(limit = 25).getOrNull() } }
             val topArtistsDeferred = async { runCatching { Spotify.topArtists(limit = 20).getOrNull() } }

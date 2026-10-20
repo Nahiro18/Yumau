@@ -67,12 +67,8 @@ fun DesktopHomeScreen(
 
     val scope = rememberCoroutineScope()
 
-    LaunchedEffect(Unit) {
-        if (session.isLoggedIn) {
-            DesktopSpotifyStore.refreshHomeFeed()
-        }
-    }
-
+    // Una sola carga al entrar (y cuando cambia la sesión). refreshHomeFeed ya
+    // renueva el token si hace falta, así que no depende de pasar por Biblioteca.
     LaunchedEffect(session.isLoggedIn) {
         if (session.isLoggedIn) {
             DesktopSpotifyStore.refreshHomeFeed()
@@ -115,6 +111,14 @@ fun DesktopHomeScreen(
 
                 if (session.isLoggedIn) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (isHomeLoading) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                strokeWidth = 2.dp,
+                                color = HomeSpotifyGreen
+                            )
+                            Spacer(Modifier.width(10.dp))
+                        }
                         val avatar = rememberNetworkImage(session.avatarUrl)
                         if (avatar != null) {
                             Image(
@@ -134,7 +138,8 @@ fun DesktopHomeScreen(
                         Spacer(Modifier.width(10.dp))
                         IconButton(
                             onClick = { scope.launch { DesktopSpotifyStore.refreshHomeFeed(force = true) } },
-                            modifier = Modifier.size(38.dp)
+                            modifier = Modifier.size(38.dp),
+                            enabled = !isHomeLoading
                         ) {
                             Icon(Icons.Default.Refresh, contentDescription = "Recargar", tint = Color.LightGray)
                         }

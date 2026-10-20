@@ -55,6 +55,7 @@ fun DesktopLibraryScreen(
     val totalLikedSongs by DesktopSpotifyStore.totalLikedSongs.collectAsState()
     val spotifyPlaylists by DesktopSpotifyStore.playlists.collectAsState()
     val totalPlaylists by DesktopSpotifyStore.totalPlaylists.collectAsState()
+    val isLibraryLoading by DesktopSpotifyStore.isLibraryLoading.collectAsState()
 
     var activePlaylist by remember { mutableStateOf<SpotifyPlaylist?>(null) }
     var activePlaylistTracks by remember { mutableStateOf<List<SpotifyPlaylistTrack>?>(null) }
@@ -130,8 +131,34 @@ fun DesktopLibraryScreen(
     }
 
     Column(Modifier.fillMaxSize()) {
-        Text("Tu Biblioteca", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = Color.White)
-        Text("Tus canciones guardadas, playlists y reproducciones", fontSize = 13.sp, color = Color(0xFF9CA3AF))
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Tu Biblioteca", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                Text("Tus canciones guardadas, playlists y reproducciones", fontSize = 13.sp, color = Color(0xFF9CA3AF))
+            }
+            if (isLibraryLoading) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(18.dp),
+                    strokeWidth = 2.dp,
+                    color = LibSpotifyGreen
+                )
+                Spacer(Modifier.width(8.dp))
+            }
+            IconButton(
+                onClick = { scope.launch { DesktopSpotifyStore.refreshLibrary(force = true) } },
+                enabled = spotifySession.isLoggedIn && !isLibraryLoading
+            ) {
+                Icon(Icons.Default.Refresh, contentDescription = "Recargar biblioteca", tint = Color.LightGray)
+            }
+        }
+        if (isLibraryLoading) {
+            Spacer(Modifier.height(8.dp))
+            LinearProgressIndicator(
+                modifier = Modifier.fillMaxWidth(),
+                color = LibSpotifyGreen,
+                trackColor = Color(0xFF2A2E3D)
+            )
+        }
         Spacer(Modifier.height(14.dp))
 
         // Unified Filter Chips
