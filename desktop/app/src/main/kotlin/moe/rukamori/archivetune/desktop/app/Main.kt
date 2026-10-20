@@ -108,10 +108,11 @@ fun playTrack(
             }
         }
         val s = DesktopSettingsStore.settings.value
-        // Tope duro: si la resolucion no termina en 10s, se muestra error claro
-        // en vez de dejar el mini-player en "Cargando..." eternamente.
+        // Tope duro de 15s (antes 10s): FLAC tiene 2.2s y YouTube ~3.8s, asi que
+        // nunca deberia acercarse; el margen evita cancelar el fallback a medias.
+        val resolveStartedAt = System.currentTimeMillis()
         val stream = withContext(Dispatchers.IO) {
-            kotlinx.coroutines.withTimeoutOrNull(10_000L) {
+            kotlinx.coroutines.withTimeoutOrNull(15_000L) {
                 DesktopStreamResolver.resolveStreamUrl(
                     videoId = songId,
                     title = title,
@@ -125,9 +126,13 @@ fun playTrack(
                 )
             }
         }
+        DesktopDiag.log(
+            "play", System.currentTimeMillis() - resolveStartedAt,
+            if (stream != null) "ok ${stream.clientName}" else "sin stream"
+        )
         if (stream == null) {
-            val fuente = if (s.playbackSource == "FLAC") "FLAC" else "YouTube Music"
-            player.markError("No disponible en $fuente: \"$title\". Revisa la fuente en Ajustes.")
+            val fuente = if (s.playbackSource == "FLAC") "FLAC ni YouTube" else "YouTube Music"
+            player.markError("No disponible en $fuente: \"$title\". Revisa Ajustes o la conexion.")
             return@launch
         }
         val finalDurationMs = if (stream.durationMs > 0) stream.durationMs else initialDurationMs

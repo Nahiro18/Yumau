@@ -903,33 +903,34 @@ fun PlaybackSettingsScreen(
                 shape = RoundedCornerShape(12.dp)
             ) {
                 Column(Modifier.padding(18.dp)) {
-                    Text("Credenciales Qobuz Personalizadas", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color.White)
+                    Text("Credenciales Qobuz (FLAC)", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color.White)
                     Text(
-                        "Opcional: sobrescribe las credenciales integradas. Si dejas los campos vacios, " +
-                            "se usan las que trae la app (las mismas que la version Android).",
+                        "FLAC se sirve desde Qobuz y necesita un User Auth Token valido. Android usa " +
+                            "exactamente el mismo motor: si no hay token, reproduce desde YouTube.",
                         color = Color.Gray, fontSize = 12.sp
                     )
                     Spacer(Modifier.height(12.dp))
 
-                    // El motor FLAC (qbdlx) trae credenciales integradas como fallback,
-                    // asi que sin configurar nada igual funciona. Avisamos de ello.
+                    // El token integrado del repo caduco (Qobuz devuelve 401). Sin token,
+                    // la app cae automaticamente a YouTube para que nunca se quede muda.
                     if (settings.qobuzUserAuthToken.isBlank() || settings.qobuzAppSecret.isBlank()) {
                         Card(
-                            colors = CardDefaults.cardColors(containerColor = Color(0xFF1D2E3B)),
+                            colors = CardDefaults.cardColors(containerColor = Color(0xFF3B2A1D)),
                             shape = RoundedCornerShape(10.dp),
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Column(Modifier.padding(12.dp)) {
                                 Text(
-                                    "Usando credenciales integradas",
-                                    fontWeight = FontWeight.Bold, color = Color(0xFF81D4FA), fontSize = 13.sp
+                                    "Sin token propio: FLAC no disponible",
+                                    fontWeight = FontWeight.Bold, color = Color(0xFFFFB74D), fontSize = 13.sp
                                 )
                                 Spacer(Modifier.height(2.dp))
                                 Text(
-                                    "Son las mismas que trae la app de Android. Si el FLAC no encuentra " +
-                                        "una pista (o suena en previews de 30 s), pega aqui tu propio " +
-                                        "App Secret y User Auth Token para reemplazarlas.",
-                                    color = Color(0xFFB0BEC5), fontSize = 12.sp
+                                    "El token integrado caduco, asi que la reproduccion cae a YouTube " +
+                                        "automaticamente. Pega un App Secret + User Auth Token validos para " +
+                                        "escuchar FLAC real. Puedes pegar varios tokens, uno por linea " +
+                                        "(formato token:PAIS), igual que el pool de Android.",
+                                    color = Color(0xFFFFCC80), fontSize = 12.sp
                                 )
                             }
                         }
@@ -955,9 +956,11 @@ fun PlaybackSettingsScreen(
                     OutlinedTextField(
                         value = userToken,
                         onValueChange = { userToken = it },
-                        label = { Text("Qobuz User Auth Token") },
+                        label = { Text("Qobuz User Auth Token (uno por linea)") },
                         modifier = Modifier.fillMaxWidth(),
-                        singleLine = true
+                        singleLine = false,
+                        minLines = 2,
+                        maxLines = 6
                     )
                     Spacer(Modifier.height(12.dp))
 

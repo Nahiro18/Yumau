@@ -28,6 +28,17 @@ object DesktopFlacResolver {
     private const val CACHE_TTL_MS = 2 * 60 * 60 * 1000L
     private const val MISS_TTL_MS = 10 * 60 * 1000L
 
+    // Circuit breaker propio: si Qobuz dice que NINGUN token sirve, no tiene sentido
+    // pagar el intento (y su espera) en cada cancion. Se salta FLAC 10 min o hasta
+    // que el usuario cambie las credenciales en Ajustes.
+    private val flacSkipUntilMs = java.util.concurrent.atomic.AtomicLong(0L)
+    private val flacSkipSignature = java.util.concurrent.atomic.AtomicReference("")
+
+    private fun credentialsSignature(): String {
+        val s = DesktopSettingsStore.settings.value
+        return listOf(s.qobuzAppId, s.qobuzAppSecret, s.qobuzUserAuthToken).joinToString("|")
+    }
+
     /** Las URLs de streaming traen ?expire=<unix>; no reusar una caducada (provocaria 403). */
     private fun isUrlExpired(url: String): Boolean {
         return runCatching {
@@ -55,9 +66,12 @@ object DesktopFlacResolver {
             DesktopSettingsStore.settings.value.qobuzAppSecret.trim()
                 .ifEmpty { DesktopLosslessTokens.QOBUZ_APP_SECRET }
 
-        override suspend fun qbdlxTokenPool(): String =
-            DesktopSettingsStore.settings.value.qobuzUserAuthToken.trim()
+        override suspend fun qbdlxTokenPool(): String {
+            val raw = DesktopSettingsStore.settings.value.qobuzUserAuthToken.trim()
                 .ifEmpty { DesktopLosslessTokens.QOBUZ_USER_AUTH_TOKEN }
+            // El pool de Android se separa por comas; aceptamos tambien "una por linea".
+            return raw.lines().map { it.trim() }.filter { it.isNotEmpty() }.joinToString(",")
+        }
     }
 
     private val flacKvStore = object : FlacKvStore {
@@ -81,7 +95,11 @@ object DesktopFlacResolver {
     suspend fun testCredentials(): String? = withContext(Dispatchers.IO) {
         val s = DesktopSettingsStore.settings.value
         val appId = s.qobuzAppId.trim().ifEmpty { DesktopLosslessTokens.QOBUZ_APP_ID }
-        val token = s.qobuzUserAuthToken.trim().ifEmpty { DesktopLosslessTokens.QOBUZ_USER_AUTH_TOKEN }
+        val rawToken = s.qobuzUserAuthToken.trim()
+            .ifEmpty { DesktopLosslessTokens.QOBUZ_USER_AUTH_TOKEN }
+        val first = rawToken.lines().map { it.trim() }.firstOrNull { it.isNotEmpty() }.orEmpty()
+        // El pool usa "token:PAIS"; la API de Qobuz espera solo el token.
+        val token = if (Regex(":[A-Za-z]{2}$").containsMatchIn(first)) first.dropLast(3) else first
         if (token.isBlank()) return@withContext "No hay ningun User Auth Token configurado"
 
         val url = "https://www.qobuz.com/api.json/0.2/catalog/search".toHttpUrl().newBuilder()
@@ -154,6 +172,20 @@ object DesktopFlacResolver {
         }
 
         val s = DesktopSettingsStore.settings.value
+
+        // Si ya sabemos que ningun token vale, saltar FLAC al instante para que
+        // la reproduccion caiga a YouTube sin esperas (mismo comportamiento que
+        // Android, que reproduce desde el primer momento).
+        val signature = credentialsSignature()
+        if (flacSkipSignature.get() != signature) {
+            flacSkipSignature.set(signature)
+            flacSkipUntilMs.set(0L)
+        }
+        if (System.currentTimeMillis() < flacSkipUntilMs.get()) {
+            DesktopDiag.log("flac", 0L, "skip: sin token valido (en pausa)")
+            return null
+        }
+
         // Credenciales efectivas: las del usuario o las integradas (fallback).
         val effectiveSecret = s.qobuzAppSecret.trim()
             .ifEmpty { DesktopLosslessTokens.QOBUZ_APP_SECRET }
@@ -176,16 +208,26 @@ object DesktopFlacResolver {
             durationMs = if (durationMs > 0) durationMs else null
         )
 
-        // Intenta la calidad pedida y, si la cuenta no la soporta (p.ej. Hi-Res sin
-        // plan Studio), baja a CD (6) en vez de rendirse y caer a YouTube.
+        // Presupuesto TOTAL para FLAC: 2.2 s. Antes eran 3 s por calidad (hasta 6 s)
+        // y, sumado a YouTube, agotaba el tope de 10 s y dejaba la app sin audio.
+        // Si el token esta muerto, el primer intento falla en ~0.3 s y se corta.
         var stream: moe.rukamori.archivetune.flaccore.streaming.FlacStreamUrl? = null
+        val budgetEndsAt = System.currentTimeMillis() + 2200L
         for (candidateFormat in listOf(formatId, 6).distinct()) {
-            stream = withTimeoutOrNull(3000L) {
+            val remaining = budgetEndsAt - System.currentTimeMillis()
+            if (remaining <= 250L) break
+            stream = withTimeoutOrNull(remaining) {
                 runCatching { resolver.resolve(query, candidateFormat) }.getOrNull()
             }
             if (stream != null) break
+            // Token invalido: probar otra calidad daria el mismo 401. Cortar ya.
+            if (runCatching { credentialStore.allDead() }.getOrDefault(false)) break
         }
         if (stream == null) {
+            if (runCatching { credentialStore.allDead() }.getOrDefault(false)) {
+                flacSkipUntilMs.set(System.currentTimeMillis() + 10 * 60 * 1000L)
+                DesktopDiag.log("flac", 0L, "sin token valido: FLAC en pausa 10 min")
+            }
             missCache[key] = System.currentTimeMillis()
             return null
         }

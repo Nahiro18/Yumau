@@ -68,6 +68,9 @@ object DesktopStreamResolver {
     // solo se usa cuando ya esta listo ( transformational en milisegundos).
     private val cipherWarmStarted = java.util.concurrent.atomic.AtomicBoolean(false)
     private val cipherFastReady = java.util.concurrent.atomic.AtomicBoolean(false)
+    // Si desofuscar tarda demasiado (Rhino lento), dejamos de pagar ese coste en
+    // cada tema durante 10 min y usamos la URL directa (que va sobrada de velocidad).
+    private val cipherDisabledUntilMs = java.util.concurrent.atomic.AtomicLong(0L)
 
     /**
      * Descarga y compila el plan del descifrador en segundo plano. Idempotente y
@@ -391,7 +394,8 @@ object DesktopStreamResolver {
             val candidate = selectFormat(formats, preferredQuality) ?: formats.firstOrNull() ?: return null
 
             val direct = candidate.url
-            val cipherReady = cipherFastReady.get()
+            val cipherReady = cipherFastReady.get() &&
+                System.currentTimeMillis() >= cipherDisabledUntilMs.get()
             val streamUrl = when {
                 // URL directa sin 'n': se usa tal cual (0 esperas).
                 !direct.isNullOrBlank() && !hasNParam(direct) -> direct
@@ -400,21 +404,19 @@ object DesktopStreamResolver {
                 // el player a medio descargar cada vez.
                 !direct.isNullOrBlank() && cipherReady -> {
                     val t0 = System.currentTimeMillis()
-                    val transformed = withTimeoutOrNull(1200L) {
+                    val transformed = withTimeoutOrNull(900L) {
                         NewPipeUtils.getStreamUrl(candidate, videoId, client).getOrNull()
                     }
                     if (transformed.isNullOrBlank()) {
-                        cipherFastReady.set(false)
-                        warmUpCipher()
+                        // No bloqueamos la reproduccion: directa + pausa de 10 min.
+                        cipherDisabledUntilMs.set(System.currentTimeMillis() + 10 * 60 * 1000L)
+                        DesktopDiag.log("cipher-n", System.currentTimeMillis() - t0, "lento: URL directa")
                     } else {
                         DesktopDiag.log("cipher-n", System.currentTimeMillis() - t0, "ok")
                     }
                     transformed ?: direct
                 }
-                !direct.isNullOrBlank() -> {
-                    warmUpCipher()
-                    direct
-                }
+                !direct.isNullOrBlank() -> direct
                 // Sin URL directa: hay que descifrar por obligacion (con timeout).
                 else -> withTimeoutOrNull(1800L) {
                     NewPipeUtils.getStreamUrl(candidate, videoId, client).getOrNull()
